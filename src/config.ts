@@ -20,6 +20,8 @@ const schema = z.object({
   POLICY_VERSION: z.string().default('1.0'),
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Optional: receives structured JSON alerts (Slack/Make.com/Zapier incoming webhook URL)
+  WEBHOOK_ALERT_URL: z.string().url().optional(),
 });
 
 function loadConfig() {

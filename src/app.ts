@@ -10,7 +10,7 @@ import adminRoutes from './routes/admin/index';
 
 export function buildApp() {
   const fastify = Fastify({
-    logger: {
+    logger: process.env.NODE_ENV === 'test' ? false : {
       level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
       // Never log request bodies — they contain message content
       serializers: {

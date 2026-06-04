@@ -5,7 +5,8 @@ import { decrypt, decryptJson, encrypt } from '../crypto';
 import { config } from '../config';
 import { loadChannelByPhoneId, invalidateBotCache } from './bot.service';
 import { safetyClassifier } from './safety.service';
-import { notifyCredentialError } from './notification.service';
+import type { SafetyLevel } from './safety.service';
+import { notifyCredentialError, notifyLLMFailure } from './notification.service';
 import * as consentService from './consent.service';
 import { getRelevantKnowledge } from './knowledge.service';
 import { tryIncrementQuota } from './quota.service';
@@ -111,14 +112,22 @@ export async function processInboundMessage(job: InboundMessageJob): Promise<voi
   if (!inputText) return;
 
   // ── Step 6: SafetyClassifier on INPUT (full async check with LLM tier) ──
-  const inputSafety = await safetyClassifier.classifyAsync(inputText);
+  const inputSafety = await safetyClassifier.classifyAsync(inputText, bot.safetyLevel as SafetyLevel);
   if (inputSafety.isCrisis) {
     await handleCrisis(bot.id, bot.crisisConfig, endUser.id, channelProvider, channel.phoneId, channelCreds, job.from, inputSafety, 'input_detected');
     return;
   }
 
-  // ── Quota gate — atomic check+increment before any external API call ────
-  const withinQuota = await tryIncrementQuota(bot.orgId).catch(() => true); // fail open
+  // ── Quota gate — fail-closed: a DB error blocks the message rather than
+  //    charging against an unknown balance. The user gets a transient error
+  //    message; the job is NOT retried (we return cleanly).
+  let withinQuota: boolean;
+  try {
+    withinQuota = await tryIncrementQuota(bot.orgId);
+  } catch {
+    await channelProvider.sendText({ phoneId: channel.phoneId, accessToken: channelCreds.accessToken, to: job.from, text: 'El servicio no está disponible en este momento. Intenta de nuevo en unos minutos.', apiVersion: config.META_API_VERSION });
+    return;
+  }
   if (!withinQuota) {
     await channelProvider.sendText({ phoneId: channel.phoneId, accessToken: channelCreds.accessToken, to: job.from, text: 'El servicio ha alcanzado su límite mensual de mensajes. Contacta al administrador.', apiVersion: config.META_API_VERSION });
     return;
@@ -157,8 +166,8 @@ export async function processInboundMessage(job: InboundMessageJob): Promise<voi
     return;
   }
 
-  // ── Step 9: SafetyClassifier on OUTPUT ───────────────────────────────────
-  const outputSafety = safetyClassifier.classify(responseText);
+  // ── Step 9: SafetyClassifier on OUTPUT (independent of client's LLM) ───
+  const outputSafety = await safetyClassifier.classifyAsync(responseText, bot.safetyLevel as SafetyLevel);
   if (outputSafety.isCrisis) {
     responseText = buildCrisisMessage(bot.crisisConfig);
     await recordCrisisEvent(bot.id, endUser.id, outputSafety.category ?? 'unknown', 'output_filtered');
@@ -406,6 +415,10 @@ async function handleLLMError(
     await channelProvider.sendText({ phoneId, accessToken: creds.accessToken, to, text: 'El servicio no está disponible en este momento. Inténtalo más tarde.', apiVersion: config.META_API_VERSION });
     return;
   }
-  if (err instanceof LLMRateLimitError) throw err;
+  if (err instanceof LLMRateLimitError) {
+    notifyLLMFailure(botId, botName, (err as Error).message);
+    throw err;
+  }
+  notifyLLMFailure(botId, botName, err instanceof Error ? err.message : String(err));
   throw err;
 }

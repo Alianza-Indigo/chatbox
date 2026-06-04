@@ -4,6 +4,7 @@ import { db } from '../../db';
 import { encrypt } from '../../crypto';
 import { invalidateBotCache } from '../../services/bot.service';
 import { requirePermission, can } from '../../lib/rbac';
+import { logAudit } from '../../services/audit.service';
 import {
   parseBody,
   CreateBotSchema, UpdateBotSchema, PromptSchema,
@@ -61,6 +62,7 @@ const botRoutes: FastifyPluginAsync = async (fastify) => {
         llmModel: body.llmModel,
         llmApiKeyEnc: body.llmApiKey ? encrypt(body.llmApiKey) : undefined,
         llmParams: body.llmParams as Prisma.InputJsonValue,
+        safetyLevel: body.safetyLevel ?? 'standard',
         branding: body.branding ? { create: body.branding } : undefined,
       },
     });
@@ -97,9 +99,23 @@ const botRoutes: FastifyPluginAsync = async (fastify) => {
     if (body.llmApiKey !== undefined) data.llmApiKeyEnc = encrypt(body.llmApiKey);
     if (body.llmParams !== undefined) data.llmParams = body.llmParams;
     if (body.status !== undefined) data.status = body.status;
+    if (body.safetyLevel !== undefined) data.safetyLevel = body.safetyLevel;
 
     const bot = await db.bot.update({ where: { id }, data });
     invalidateBotCache(id);
+
+    if (body.llmApiKey !== undefined) {
+      logAudit({
+        orgId: existing.orgId,
+        actorId: req.user!.isSuperadmin ? undefined : req.user!.userId,
+        actorRole: req.user!.isSuperadmin ? 'superadmin' : req.user!.role,
+        action: 'bot.update_credentials',
+        targetType: 'bot',
+        targetId: id,
+        ip: req.ip,
+      });
+    }
+
     return reply.send(sanitizeBot(bot));
   });
 
@@ -111,6 +127,17 @@ const botRoutes: FastifyPluginAsync = async (fastify) => {
     if (!req.user!.isSuperadmin && existing.orgId !== req.user!.orgId) return reply.status(403).send({ error: 'Forbidden' });
     await db.bot.delete({ where: { id } });
     invalidateBotCache(id);
+
+    logAudit({
+      orgId: existing.orgId,
+      actorId: req.user!.isSuperadmin ? undefined : req.user!.userId,
+      actorRole: req.user!.isSuperadmin ? 'superadmin' : req.user!.role,
+      action: 'bot.delete',
+      targetType: 'bot',
+      targetId: id,
+      ip: req.ip,
+    });
+
     return reply.status(204).send();
   });
 

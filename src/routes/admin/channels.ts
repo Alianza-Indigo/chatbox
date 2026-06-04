@@ -3,6 +3,7 @@ import { db } from '../../db';
 import { encryptJson, decryptJson } from '../../crypto';
 import { invalidateBotCache } from '../../services/bot.service';
 import { requirePermission } from '../../lib/rbac';
+import { logAudit } from '../../services/audit.service';
 import { config } from '../../config';
 import { parseBody, CreateChannelSchema, UpdateChannelSchema, EmbeddedSignupSchema } from '../../lib/validate';
 import type { MetaCloudCredentials } from '../../types';
@@ -25,6 +26,16 @@ const channelRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     invalidateBotCache(botId);
+    logAudit({
+      orgId: req.user!.isSuperadmin ? undefined : req.user!.orgId,
+      actorId: req.user!.isSuperadmin ? undefined : req.user!.userId,
+      actorRole: req.user!.isSuperadmin ? 'superadmin' : req.user!.role,
+      action: 'channel.create',
+      targetType: 'channel',
+      targetId: channel.id,
+      metadata: { botId, provider, phoneId },
+      ip: req.ip,
+    });
     return reply.status(201).send(sanitizeChannel(channel));
   });
 
@@ -62,6 +73,16 @@ const channelRoutes: FastifyPluginAsync = async (fastify) => {
     if (!existing || existing.botId !== botId) return reply.status(404).send({ error: 'Channel not found' });
     await db.channel.delete({ where: { id: channelId } });
     invalidateBotCache(botId);
+    logAudit({
+      orgId: req.user!.isSuperadmin ? undefined : req.user!.orgId,
+      actorId: req.user!.isSuperadmin ? undefined : req.user!.userId,
+      actorRole: req.user!.isSuperadmin ? 'superadmin' : req.user!.role,
+      action: 'channel.delete',
+      targetType: 'channel',
+      targetId: channelId,
+      metadata: { botId },
+      ip: req.ip,
+    });
     return reply.status(204).send();
   });
 

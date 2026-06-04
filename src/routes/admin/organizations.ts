@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { db } from '../../db';
 import { hashPassword } from '../../services/auth.service';
 import { requirePermission } from '../../lib/rbac';
+import { logAudit } from '../../services/audit.service';
 import { parseBody, CreateOrgSchema, UpdateOrgSchema, InviteMemberSchema, UpdateMemberRoleSchema } from '../../lib/validate';
 
 const orgRoutes: FastifyPluginAsync = async (fastify) => {
@@ -86,6 +87,15 @@ const orgRoutes: FastifyPluginAsync = async (fastify) => {
       data: { orgId: req.params.id, email: email.trim().toLowerCase(), passwordHash, role: role ?? 'editor' },
       select: { id: true, email: true, role: true, createdAt: true },
     });
+    logAudit({
+      orgId: req.params.id,
+      actorId: req.user!.isSuperadmin ? undefined : req.user!.userId,
+      actorRole: req.user!.isSuperadmin ? 'superadmin' : req.user!.role,
+      action: 'member.invite',
+      targetType: 'org_user',
+      targetId: user.id,
+      ip: req.ip,
+    });
     return reply.status(201).send(user);
   });
 
@@ -105,6 +115,16 @@ const orgRoutes: FastifyPluginAsync = async (fastify) => {
       data: { role },
       select: { id: true, email: true, role: true },
     });
+    logAudit({
+      orgId: req.params.id,
+      actorId: req.user!.isSuperadmin ? undefined : req.user!.userId,
+      actorRole: req.user!.isSuperadmin ? 'superadmin' : req.user!.role,
+      action: 'member.change_role',
+      targetType: 'org_user',
+      targetId: req.params.userId,
+      metadata: { role },
+      ip: req.ip,
+    });
     return reply.send(user);
   });
 
@@ -119,7 +139,37 @@ const orgRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: 'Member not found in this organization' });
     }
     await db.orgUser.delete({ where: { id: req.params.userId } });
+    logAudit({
+      orgId: req.params.id,
+      actorId: req.user!.isSuperadmin ? undefined : req.user!.userId,
+      actorRole: req.user!.isSuperadmin ? 'superadmin' : req.user!.role,
+      action: 'member.remove',
+      targetType: 'org_user',
+      targetId: req.params.userId,
+      ip: req.ip,
+    });
     return reply.status(204).send();
+  });
+  // Audit log — owners and superadmins only
+  fastify.get<{ Params: { id: string }; Querystring: { limit?: string; before?: string } }>('/:id/audit-log', async (req, reply) => {
+    if (!req.user!.isSuperadmin && req.user!.orgId !== req.params.id) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+    if (!req.user!.isSuperadmin && req.user!.role !== 'owner') {
+      return reply.status(403).send({ error: 'Requires owner role' });
+    }
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    const before = req.query.before ? new Date(req.query.before) : undefined;
+
+    const entries = await db.auditLog.findMany({
+      where: {
+        orgId: req.params.id,
+        ...(before ? { createdAt: { lt: before } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    return reply.send(entries);
   });
 };
 

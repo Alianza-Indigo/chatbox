@@ -3,6 +3,7 @@ import { redisConnection, MESSAGE_QUEUE, dlq, messageQueue } from './queue';
 import { processInboundMessage } from '../services/conversation.service';
 import { getPubClient } from '../lib/pubsub';
 import { logger } from '../logger';
+import { notifyDLQAlert } from '../services/notification.service';
 import type { InboundMessageJob } from '../types';
 
 // Separate Redis client for conversation mutex operations (not in subscriber mode)
@@ -62,7 +63,9 @@ export function startWorker(): Worker {
     // Move to DLQ once all retries are exhausted so the payload is preserved
     // for manual inspection and replay without blocking the main queue.
     if (exhausted && job) {
-      dlq.add('failed-message', job.data, { jobId: `dlq-${job.id}` }).catch((dlqErr: Error) => {
+      dlq.add('failed-message', job.data, { jobId: `dlq-${job.id}` }).then(() => {
+        notifyDLQAlert(job.id!, job.data.phoneId);
+      }).catch((dlqErr: Error) => {
         logger.error({ err: dlqErr.message }, 'failed to enqueue to DLQ');
       });
     }

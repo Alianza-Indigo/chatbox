@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { db } from '../../db';
 import { deleteEndUserData } from '../../services/consent.service';
 import { requirePermission } from '../../lib/rbac';
+import { logAudit } from '../../services/audit.service';
 import { parseBody, PatchUserSchema } from '../../lib/validate';
 
 const userRoutes: FastifyPluginAsync = async (fastify) => {
@@ -28,6 +29,16 @@ const userRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     await deleteEndUserData(userId);
+    logAudit({
+      orgId: req.user!.isSuperadmin ? undefined : req.user!.orgId,
+      actorId: req.user!.isSuperadmin ? undefined : req.user!.userId,
+      actorRole: req.user!.isSuperadmin ? 'superadmin' : req.user!.role,
+      action: 'arco.erasure',
+      targetType: 'end_user',
+      targetId: userId,
+      metadata: { botId },
+      ip: req.ip,
+    });
     return reply.send({ deleted: true, userId });
   });
 
@@ -42,6 +53,16 @@ const userRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const updated = await db.endUser.update({ where: { id: userId }, data: { paused } });
+    logAudit({
+      orgId: req.user!.isSuperadmin ? undefined : req.user!.orgId,
+      actorId: req.user!.isSuperadmin ? undefined : req.user!.userId,
+      actorRole: req.user!.isSuperadmin ? 'superadmin' : req.user!.role,
+      action: 'user.suspend',
+      targetType: 'end_user',
+      targetId: userId,
+      metadata: { botId, paused },
+      ip: req.ip,
+    });
     return reply.send({ id: updated.id, paused: updated.paused });
   });
 

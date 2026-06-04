@@ -51,6 +51,7 @@ model Bot {
   llmModel      String?  @map("llm_model")
   llmApiKeyEnc  Bytes?   @map("llm_api_key_enc") // AES-256-GCM encrypted
   llmParams     Json?    @map("llm_params")
+  safetyLevel   String   @default("standard") @map("safety_level") // 'strict' | 'standard' | 'minimal'
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
@@ -239,4 +240,21 @@ model Feedback {
   endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
 
   @@map("feedback")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  orgId      String?  @map("org_id")
+  actorId    String?  @map("actor_id")
+  actorRole  String?  @map("actor_role")
+  action     String
+  targetType String   @map("target_type")
+  targetId   String?  @map("target_id")
+  metadata   Json?
+  ip         String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([orgId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
 }

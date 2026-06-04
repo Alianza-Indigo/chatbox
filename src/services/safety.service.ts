@@ -45,6 +45,11 @@ Rules:
 Response format:
 {"isCrisis": boolean, "category": "suicide_risk" | "self_harm" | "violence_risk" | null}`;
 
+// 'strict'   — keyword scan + always run LLM tier (even on keyword miss)
+// 'standard' — keyword scan + LLM only when no keyword match (default)
+// 'minimal'  — keyword scan only, never escalate to LLM
+export type SafetyLevel = 'strict' | 'standard' | 'minimal';
+
 export class SafetyClassifier {
   private llmClient?: Anthropic;
   private llmClientKey?: string; // track which key the cached client was built with
@@ -56,11 +61,17 @@ export class SafetyClassifier {
     return { isCrisis: false };
   }
 
-  async classifyAsync(text: string): Promise<ClassificationResult> {
-    // Fast keyword check first — no API call, no latency
+  async classifyAsync(text: string, safetyLevel: SafetyLevel = 'standard'): Promise<ClassificationResult> {
+    // Fast keyword check always runs first — no network, no latency
     const keywordResult = this.classify(text);
-    if (keywordResult.isCrisis) return keywordResult;
 
+    // minimal: keyword only — LLM tier disabled for this bot
+    if (safetyLevel === 'minimal') return keywordResult;
+
+    // standard: escalate to LLM only when keyword scan found nothing
+    if (safetyLevel === 'standard' && keywordResult.isCrisis) return keywordResult;
+
+    // strict or standard-with-no-keyword-match: run LLM tier
     const platformKey = process.env.SAFETY_PROVIDER_API_KEY;
     if (!platformKey) return keywordResult;
 

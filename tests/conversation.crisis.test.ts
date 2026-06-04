@@ -19,6 +19,8 @@ vi.mock('../src/db', () => ({
     crisisEvent: { create: vi.fn(), deleteMany: vi.fn() },
     bot: { update: vi.fn() },
     feedback: { deleteMany: vi.fn() },
+    // null → tryIncrementQuota returns true (fail-open for unknown org) — quota not exercised here
+    organization: { findUnique: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn((ops: unknown[]) => Promise.all(ops)),
   },
 }));

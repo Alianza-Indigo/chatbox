@@ -53,6 +53,7 @@ export const CreateBotSchema = z.object({
   llmModel: z.string().optional(),
   llmApiKey: z.string().optional(),
   llmParams: z.record(z.unknown()).optional(),
+  safetyLevel: z.enum(['strict', 'standard', 'minimal']).optional(),
   branding: BrandingSchema.optional(),
 });
 
@@ -67,6 +68,7 @@ export const UpdateBotSchema = z.object({
   llmModel: z.string().optional(),
   llmApiKey: z.string().optional(),
   llmParams: z.record(z.unknown()).optional(),
+  safetyLevel: z.enum(['strict', 'standard', 'minimal']).optional(),
 });
 
 export const PromptSchema = z.object({
