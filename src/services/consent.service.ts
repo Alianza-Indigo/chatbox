@@ -71,9 +71,10 @@ export async function pauseEndUser(endUser: EndUser): Promise<void> {
 }
 
 export async function deleteEndUserData(endUserId: string, botId: string): Promise<void> {
-  // ARCO right: delete all messages and consents for this end_user
+  // ARCO right: delete all data for this end_user, including the identity record itself
   await db.message.deleteMany({ where: { endUserId, botId } });
   await db.consent.deleteMany({ where: { endUserId, botId } });
   await db.crisisEvent.deleteMany({ where: { endUserId, botId } });
   await db.feedback.deleteMany({ where: { endUserId } });
+  await db.endUser.delete({ where: { id: endUserId } });
 }

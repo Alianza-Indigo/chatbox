@@ -5,6 +5,16 @@ import { encrypt } from '../../crypto';
 import { invalidateBotCache } from '../../services/bot.service';
 
 const botRoutes: FastifyPluginAsync = async (fastify) => {
+  // Org isolation for /:id sub-routes (params.id, not params.botId caught by parent)
+  fastify.addHook('preHandler', async (req, reply) => {
+    if (!req.user || req.user.isSuperadmin) return;
+    const params = req.params as Record<string, string>;
+    const botId = params.id;
+    if (!botId) return;
+    const bot = await db.bot.findUnique({ where: { id: botId }, select: { orgId: true } });
+    if (!bot || bot.orgId !== req.user.orgId) return reply.status(403).send({ error: 'Forbidden' });
+  });
+
   // List bots — scoped to the requesting org
   fastify.get('/', async (req, reply) => {
     const orgFilter = req.user!.isSuperadmin ? {} : { orgId: req.user!.orgId };
@@ -94,16 +104,17 @@ const botRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   // Update system_prompt (creates a new version)
-  fastify.post<{ Params: { id: string }; Body: { systemPrompt: string; createdBy?: string } }>('/:id/prompt', async (req, reply) => {
+  fastify.post<{ Params: { id: string }; Body: { systemPrompt: string } }>('/:id/prompt', async (req, reply) => {
     const { id } = req.params;
-    const { systemPrompt, createdBy } = req.body;
+    const { systemPrompt } = req.body;
+    const createdBy = req.user!.userId;
 
     const latest = await db.botPromptVersion.findFirst({ where: { botId: id }, orderBy: { version: 'desc' } });
     const nextVersion = (latest?.version ?? 0) + 1;
 
     await db.$transaction([
       db.bot.update({ where: { id }, data: { systemPrompt } }),
-      db.botPromptVersion.create({ data: { botId: id, version: nextVersion, systemPrompt, createdBy: createdBy ?? null } }),
+      db.botPromptVersion.create({ data: { botId: id, version: nextVersion, systemPrompt, createdBy } }),
     ]);
 
     invalidateBotCache(id);
