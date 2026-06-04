@@ -42,13 +42,13 @@ const webhookRoutes: FastifyPluginAsync = async (fastify) => {
 
     // Enqueue BEFORE ACK — if Redis is unavailable we return 500 so Meta retries.
     // BullMQ enqueue is sub-millisecond so this stays well within Meta's 5 s window.
-    await processPayload(req.body);
+    await processPayload(req.body, req.id as string);
 
     return reply.status(200).send('EVENT_RECEIVED');
   });
 };
 
-async function processPayload(body: unknown): Promise<void> {
+async function processPayload(body: unknown, requestId: string): Promise<void> {
   const { messages } = metaProvider.parseInbound(body);
   for (const msg of messages) {
     await enqueueInboundMessage({
@@ -60,6 +60,7 @@ async function processPayload(body: unknown): Promise<void> {
       audioId: msg.audioId,
       interactiveReply: msg.interactiveReply,
       timestamp: msg.timestamp,
+      requestId,
     });
   }
 }

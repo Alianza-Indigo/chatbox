@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -7,6 +8,7 @@ import swaggerUi from '@fastify/swagger-ui';
 import { db } from './db';
 import { getPubClient } from './lib/pubsub';
 import { registry } from './services/metrics.service';
+import { Sentry } from './lib/sentry';
 import { openApiSpec } from './openapi';
 import webhookRoutes from './routes/webhook';
 import authRoutes from './routes/auth';
@@ -14,6 +16,8 @@ import adminRoutes from './routes/admin/index';
 
 export function buildApp() {
   const fastify = Fastify({
+    // UUID request IDs enable log correlation across HTTP → queue → worker
+    genReqId: () => randomUUID(),
     logger: process.env.NODE_ENV === 'test' ? false : {
       level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
       // Never log request bodies — they contain message content
@@ -22,6 +26,11 @@ export function buildApp() {
         res: (res) => ({ statusCode: res.statusCode }),
       },
     },
+  });
+
+  // Echo request ID on every response for client-side correlation
+  fastify.addHook('onSend', async (req, reply) => {
+    reply.header('X-Request-Id', req.id);
   });
 
   fastify.register(helmet);
@@ -67,13 +76,22 @@ export function buildApp() {
   fastify.register(authRoutes, { prefix: '/auth' });
   fastify.register(adminRoutes, { prefix: '/admin' });
 
-  fastify.setErrorHandler((err, _req, reply) => {
+  fastify.setErrorHandler((err, req, reply) => {
     const e = err as Error & { statusCode?: number; validationDetails?: unknown; code?: string };
     if (e.validationDetails) {
       return reply.status(400).send({ error: 'Validation error', details: e.validationDetails });
     }
-    fastify.log.error({ err: e.message, code: e.code }, 'unhandled error');
-    reply.status(e.statusCode ?? 500).send({ error: 'Internal server error' });
+    const statusCode = e.statusCode ?? 500;
+    if (statusCode >= 500) {
+      Sentry.withScope((scope) => {
+        scope.setExtra('requestId', req.id);
+        scope.setExtra('url', req.url);
+        scope.setExtra('method', req.method);
+        Sentry.captureException(e);
+      });
+    }
+    fastify.log.error({ err: e.message, code: e.code, requestId: req.id }, 'unhandled error');
+    reply.status(statusCode).send({ error: 'Internal server error' });
   });
 
   return fastify;

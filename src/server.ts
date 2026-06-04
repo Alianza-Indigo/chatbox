@@ -1,5 +1,9 @@
 import { config } from './config';
+import { initSentry } from './lib/sentry';
 import { buildApp } from './app';
+
+// Must be initialized before any other import that could throw
+initSentry(config.SENTRY_DSN, config.NODE_ENV);
 
 const app = buildApp();
 

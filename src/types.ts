@@ -35,6 +35,7 @@ export interface InboundMessageJob {
   };
   timestamp: number;
   lockRetries?: number; // incremented each time the job is rescheduled due to a conversation lock
+  requestId?: string;   // HTTP request ID for log correlation (webhook → queue → worker)
 }
 
 // ─── LLM provider interface ───────────────────────────────────────────────────

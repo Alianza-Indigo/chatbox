@@ -5,6 +5,7 @@ import { getPubClient } from '../lib/pubsub';
 import { logger } from '../logger';
 import { notifyDLQAlert } from '../services/notification.service';
 import { updateDLQDepth } from '../services/metrics.service';
+import { Sentry } from '../lib/sentry';
 import type { InboundMessageJob } from '../types';
 
 // Separate Redis client for conversation mutex operations (not in subscriber mode)
@@ -32,7 +33,7 @@ export function startWorker(): Worker {
             delay: LOCK_RETRY_BASE_MS * lockRetries,
           });
         } else {
-          logger.warn({ jobId: job.id, phoneId: job.data.phoneId }, 'conversation lock: max retries exceeded, dropping job');
+          logger.warn({ jobId: job.id, phoneId: job.data.phoneId, requestId: job.data.requestId }, 'conversation lock: max retries exceeded, dropping job');
         }
         return; // current job is done — work was rescheduled (or dropped)
       }
@@ -57,9 +58,19 @@ export function startWorker(): Worker {
     const exhausted = (job?.attemptsMade ?? 0) >= maxAttempts;
 
     logger.error(
-      { jobId: job?.id, phoneId: job?.data?.phoneId, attempt: job?.attemptsMade, exhausted, err: err?.message },
+      { jobId: job?.id, phoneId: job?.data?.phoneId, requestId: job?.data?.requestId, attempt: job?.attemptsMade, exhausted, err: err?.message },
       'job failed',
     );
+
+    // Report exhausted jobs to Sentry for visibility on production incidents
+    if (exhausted && err) {
+      Sentry.withScope((scope) => {
+        scope.setTag('phoneId', job?.data?.phoneId ?? 'unknown');
+        scope.setExtra('requestId', job?.data?.requestId);
+        scope.setExtra('jobId', job?.id);
+        Sentry.captureException(err);
+      });
+    }
 
     // Move to DLQ once all retries are exhausted so the payload is preserved
     // for manual inspection and replay without blocking the main queue.

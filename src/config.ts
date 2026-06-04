@@ -22,6 +22,8 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   // Optional: receives structured JSON alerts (Slack/Make.com/Zapier incoming webhook URL)
   WEBHOOK_ALERT_URL: z.string().url().optional(),
+  // Sentry DSN for error tracking — omit to disable (e.g. in local dev)
+  SENTRY_DSN: z.string().url().optional(),
   // Multi-key envelope encryption: JSON map of kid→base64-encoded 32-byte key
   // e.g. '{"0":"<base64>","1":"<base64>"}'. Use ENCRYPTION_CURRENT_KID to select
   // the active key for new encryptions. Falls back to FIELD_ENCRYPTION_KEY (kid 0).

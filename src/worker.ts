@@ -1,13 +1,19 @@
-import './config'; // Validate env vars on startup
+import { config } from './config';
+import { initSentry, Sentry } from './lib/sentry';
 import { startWorker } from './queue/consumer';
 import { db } from './db';
 import { logger } from './logger';
 import { getSubClient, closePubSub, CACHE_INVALIDATE_CHANNEL } from './lib/pubsub';
 import { clearLocalBotCache } from './services/bot.service';
 
+// Initialize Sentry as the first executable statement so it's active before
+// any async code runs (uncaughtException/unhandledRejection handlers below).
+initSentry(config.SENTRY_DSN, config.NODE_ENV);
+
 // Catch programming errors that escape BullMQ's own error boundary
 process.on('uncaughtException', (err) => {
   logger.error({ err: err.message, stack: err.stack }, 'uncaught exception — exiting');
+  Sentry.captureException(err);
   process.exit(1);
 });
 
@@ -15,6 +21,7 @@ process.on('uncaughtException', (err) => {
 // Redis connection drops and recovers automatically.
 process.on('unhandledRejection', (reason) => {
   logger.error({ reason: String(reason) }, 'unhandled rejection');
+  if (reason instanceof Error) Sentry.captureException(reason);
 });
 
 const worker = startWorker();
