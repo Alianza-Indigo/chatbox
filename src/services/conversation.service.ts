@@ -219,7 +219,7 @@ async function handleARCORequest(
   creds: MetaCloudCredentials,
   to: string,
 ): Promise<void> {
-  await consentService.deleteEndUserData(endUserId, botId);
+  await consentService.deleteEndUserData(endUserId);
   await channelProvider.sendText({
     phoneId, accessToken: creds.accessToken, to,
     text: 'Tu historial de conversación y datos han sido eliminados conforme a tu solicitud (Derecho ARCO). Si deseas continuar usando el servicio, escríbeme de nuevo.',

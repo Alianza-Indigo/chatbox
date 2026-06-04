@@ -25,7 +25,7 @@ const userRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: 'End user not found' });
     }
 
-    await deleteEndUserData(userId, botId);
+    await deleteEndUserData(userId);
     return reply.send({ deleted: true, userId });
   });
 

@@ -221,8 +221,7 @@ ALTER TABLE "bot_branding" ADD CONSTRAINT "bot_branding_bot_id_fkey" FOREIGN KEY
 -- AddForeignKey
 ALTER TABLE "bot_prompt_versions" ADD CONSTRAINT "bot_prompt_versions_bot_id_fkey" FOREIGN KEY ("bot_id") REFERENCES "bots"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- AddForeignKey
-ALTER TABLE "bot_prompt_versions" ADD CONSTRAINT "bot_prompt_versions_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "org_users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+-- NOTE: created_by is a free-text audit field (stores user id or 'superadmin') — no FK constraint
 
 -- AddForeignKey
 ALTER TABLE "bot_commands" ADD CONSTRAINT "bot_commands_bot_id_fkey" FOREIGN KEY ("bot_id") REFERENCES "bots"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -239,27 +238,26 @@ ALTER TABLE "channels" ADD CONSTRAINT "channels_bot_id_fkey" FOREIGN KEY ("bot_i
 -- AddForeignKey
 ALTER TABLE "bot_integrations" ADD CONSTRAINT "bot_integrations_bot_id_fkey" FOREIGN KEY ("bot_id") REFERENCES "bots"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- AddForeignKey
-ALTER TABLE "end_users" ADD CONSTRAINT "end_users_bot_id_fkey" FOREIGN KEY ("bot_id") REFERENCES "bots"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+-- AddForeignKey: deleting a Bot cascades to all its EndUsers
+ALTER TABLE "end_users" ADD CONSTRAINT "end_users_bot_id_fkey" FOREIGN KEY ("bot_id") REFERENCES "bots"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey: deleting an EndUser cascades to their Consents
+ALTER TABLE "consents" ADD CONSTRAINT "consents_end_user_id_fkey" FOREIGN KEY ("end_user_id") REFERENCES "end_users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey: deleting a Bot cascades to all Messages; deleting an EndUser cascades too
+ALTER TABLE "messages" ADD CONSTRAINT "messages_bot_id_fkey" FOREIGN KEY ("bot_id") REFERENCES "bots"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "consents" ADD CONSTRAINT "consents_end_user_id_fkey" FOREIGN KEY ("end_user_id") REFERENCES "end_users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "messages" ADD CONSTRAINT "messages_end_user_id_fkey" FOREIGN KEY ("end_user_id") REFERENCES "end_users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey: deleting a Bot cascades to all CrisisEvents; deleting an EndUser too
+ALTER TABLE "crisis_events" ADD CONSTRAINT "crisis_events_bot_id_fkey" FOREIGN KEY ("bot_id") REFERENCES "bots"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "messages" ADD CONSTRAINT "messages_bot_id_fkey" FOREIGN KEY ("bot_id") REFERENCES "bots"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "crisis_events" ADD CONSTRAINT "crisis_events_end_user_id_fkey" FOREIGN KEY ("end_user_id") REFERENCES "end_users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey: deleting a Message cascades to its Feedback; deleting an EndUser too
+ALTER TABLE "feedback" ADD CONSTRAINT "feedback_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "messages"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "messages" ADD CONSTRAINT "messages_end_user_id_fkey" FOREIGN KEY ("end_user_id") REFERENCES "end_users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "crisis_events" ADD CONSTRAINT "crisis_events_bot_id_fkey" FOREIGN KEY ("bot_id") REFERENCES "bots"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "crisis_events" ADD CONSTRAINT "crisis_events_end_user_id_fkey" FOREIGN KEY ("end_user_id") REFERENCES "end_users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "feedback" ADD CONSTRAINT "feedback_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "messages"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "feedback" ADD CONSTRAINT "feedback_end_user_id_fkey" FOREIGN KEY ("end_user_id") REFERENCES "end_users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
+ALTER TABLE "feedback" ADD CONSTRAINT "feedback_end_user_id_fkey" FOREIGN KEY ("end_user_id") REFERENCES "end_users"("id") ON DELETE CASCADE ON UPDATE CASCADE;

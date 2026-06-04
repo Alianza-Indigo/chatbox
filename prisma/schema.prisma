@@ -30,8 +30,7 @@ model OrgUser {
   passwordHash String   @map("password_hash")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  org               Organization       @relation(fields: [orgId], references: [id])
-  botPromptVersions BotPromptVersion[]
+  org Organization @relation(fields: [orgId], references: [id])
 
   @@map("org_users")
 }
@@ -94,8 +93,7 @@ model BotPromptVersion {
   createdBy    String?  @map("created_by")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  bot    Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
-  editor OrgUser? @relation(fields: [createdBy], references: [id])
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
 
   @@map("bot_prompt_versions")
 }
@@ -175,7 +173,7 @@ model EndUser {
   paused      Boolean  @default(false)
   createdAt   DateTime @default(now()) @map("created_at")
 
-  bot          Bot           @relation(fields: [botId], references: [id])
+  bot          Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
   consents     Consent[]
   messages     Message[]
   crisisEvents CrisisEvent[]
@@ -192,7 +190,7 @@ model Consent {
   acceptedAt    DateTime @default(now()) @map("accepted_at")
   policyVersion String   @map("policy_version")
 
-  endUser EndUser @relation(fields: [endUserId], references: [id])
+  endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
 
   @@map("consents")
 }
@@ -207,8 +205,8 @@ model Message {
   externalId String?  @map("external_id") // WA message_id for idempotency
   createdAt  DateTime @default(now()) @map("created_at")
 
-  bot      Bot        @relation(fields: [botId], references: [id])
-  endUser  EndUser    @relation(fields: [endUserId], references: [id])
+  bot      Bot        @relation(fields: [botId], references: [id], onDelete: Cascade)
+  endUser  EndUser    @relation(fields: [endUserId], references: [id], onDelete: Cascade)
   feedback Feedback[]
 
   @@index([botId, endUserId, createdAt])
@@ -223,8 +221,8 @@ model CrisisEvent {
   category    String
   actionTaken String   @map("action_taken")
 
-  bot     Bot     @relation(fields: [botId], references: [id])
-  endUser EndUser @relation(fields: [endUserId], references: [id])
+  bot     Bot     @relation(fields: [botId], references: [id], onDelete: Cascade)
+  endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
 
   @@map("crisis_events")
 }
@@ -236,8 +234,8 @@ model Feedback {
   rating    Int
   createdAt DateTime @default(now()) @map("created_at")
 
-  message Message @relation(fields: [messageId], references: [id])
-  endUser EndUser @relation(fields: [endUserId], references: [id])
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
 
   @@map("feedback")
 }

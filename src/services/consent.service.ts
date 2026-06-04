@@ -70,11 +70,8 @@ export async function pauseEndUser(endUser: EndUser): Promise<void> {
   await db.endUser.update({ where: { id: endUser.id }, data: { paused: true } });
 }
 
-export async function deleteEndUserData(endUserId: string, botId: string): Promise<void> {
-  // ARCO right: delete all data for this end_user, including the identity record itself
-  await db.message.deleteMany({ where: { endUserId, botId } });
-  await db.consent.deleteMany({ where: { endUserId, botId } });
-  await db.crisisEvent.deleteMany({ where: { endUserId, botId } });
-  await db.feedback.deleteMany({ where: { endUserId } });
+export async function deleteEndUserData(endUserId: string): Promise<void> {
+  // ARCO right to erasure — cascade deletes all child records (messages, consents,
+  // crisisEvents, feedback) via DB-level ON DELETE CASCADE constraints.
   await db.endUser.delete({ where: { id: endUserId } });
 }
