@@ -42,9 +42,8 @@ export function startWorker(): Worker {
       if (!acquired) {
         const lockRetries = (jobData.lockRetries ?? 0) + 1;
         if (lockRetries <= MAX_LOCK_RETRIES) {
-          // Re-enqueue the already-decrypted job data with the incremented retry counter.
-          // The producer would re-encrypt; here we re-enqueue the RAW (still-encrypted)
-          // payload from job.data to avoid double-encrypt on reschedule.
+          // Re-enqueue using job.data (still-encrypted from Redis), NOT jobData
+          // (decrypted), to avoid double-encrypting the PII fields on reschedule.
           await messageQueue.add('process', { ...job.data, lockRetries }, {
             delay: LOCK_RETRY_BASE_MS * lockRetries,
           });
