@@ -9,6 +9,7 @@ import userRoutes from './users';
 import feedbackRoutes from './feedback';
 import proactiveRoutes from './proactive';
 import integrationRoutes from './integrations';
+import dlqRoutes from './dlq';
 
 const adminRoutes: FastifyPluginAsync = async (fastify) => {
   // Auth: JWT or ADMIN_API_KEY superadmin bypass
@@ -34,6 +35,7 @@ const adminRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.register(feedbackRoutes, { prefix: '/bots' });
   fastify.register(proactiveRoutes, { prefix: '/bots' });
   fastify.register(integrationRoutes, { prefix: '/bots' });
+  fastify.register(dlqRoutes);
 };
 
 export default adminRoutes;

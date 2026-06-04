@@ -13,6 +13,7 @@ import type { MetaCloudCredentials } from '../../types';
 
 const proactiveRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post<{ Params: { botId: string } }>('/:botId/proactive', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
     preHandler: [requirePermission('proactive:send')],
   }, async (req, reply) => {
     const { botId } = req.params;

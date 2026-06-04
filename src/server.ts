@@ -10,8 +10,18 @@ app.listen({ port: config.PORT, host: '0.0.0.0' }, (err) => {
   }
 });
 
+const SHUTDOWN_TIMEOUT_MS = 30_000;
+
 async function shutdown() {
-  await app.close();
+  // Force-exit if Fastify hasn't drained in-flight requests within the timeout
+  const forceExit = setTimeout(() => {
+    app.log.error('graceful shutdown timed out — forcing exit');
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+  forceExit.unref();
+
+  await app.close(); // stops accepting new connections and drains in-flight requests
+  clearTimeout(forceExit);
   process.exit(0);
 }
 

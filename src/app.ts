@@ -3,7 +3,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { db } from './db';
-import { messageQueue } from './queue/queue';
+import { getPubClient } from './lib/pubsub';
 import webhookRoutes from './routes/webhook';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin/index';
@@ -35,7 +35,7 @@ export function buildApp() {
   fastify.get('/health', { config: { rateLimit: false } }, async (_req, reply) => {
     const [dbOk, redisOk] = await Promise.all([
       db.$queryRaw`SELECT 1`.then(() => true).catch(() => false),
-      messageQueue.client.then(c => c.ping()).then(() => true).catch(() => false),
+      getPubClient().ping().then(() => true).catch(() => false),
     ]);
     const status = dbOk && redisOk ? 'ok' : 'degraded';
     return reply

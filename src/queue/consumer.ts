@@ -13,6 +13,7 @@ export function startWorker(): Worker {
     {
       connection: redisConnection,
       concurrency: 10,
+      lockDuration: 90_000, // 90 s max per job — covers worst-case LLM response latency
     },
   );
 

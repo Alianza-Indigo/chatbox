@@ -157,15 +157,15 @@ export const UpdateMemberRoleSchema = z.object({
 // ── Knowledge ─────────────────────────────────────────────────────────────
 
 export const KnowledgeSchema = z.object({
-  title: z.string().min(1),
-  content: z.string().min(1),
-  tags: z.array(z.string()).optional(),
+  title: z.string().min(1).max(200),
+  content: z.string().min(1).max(50_000), // ~50 KB limit prevents OOM attacks
+  tags: z.array(z.string().max(50)).max(20).optional(),
 });
 
 export const UpdateKnowledgeSchema = z.object({
-  title: z.string().min(1).optional(),
-  content: z.string().min(1).optional(),
-  tags: z.array(z.string()).optional(),
+  title: z.string().min(1).max(200).optional(),
+  content: z.string().min(1).max(50_000).optional(),
+  tags: z.array(z.string().max(50)).max(20).optional(),
 });
 
 // ── Users ─────────────────────────────────────────────────────────────────
