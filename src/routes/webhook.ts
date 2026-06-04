@@ -31,8 +31,8 @@ const webhookRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.status(403).send('Forbidden');
   });
 
-  // POST — Incoming messages from Meta
-  fastify.post('/webhook', async (req, reply) => {
+  // POST — Incoming messages from Meta (tighter limit: Meta batches, no IP needs >60/min)
+  fastify.post('/webhook', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (req, reply) => {
     const rawReq = req as RawBodyRequest;
     const signature = req.headers['x-hub-signature-256'] as string | undefined;
 

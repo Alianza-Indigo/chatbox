@@ -1,13 +1,14 @@
 import './config'; // Validate env vars on startup
 import { startWorker } from './queue/consumer';
 import { db } from './db';
+import { logger } from './logger';
 
 const worker = startWorker();
 
-console.log('[worker] started — listening for inbound messages');
+logger.info('worker started — listening for inbound messages');
 
 async function shutdown() {
-  console.log('[worker] shutting down...');
+  logger.info('worker shutting down');
   await worker.close();
   await db.$disconnect();
   process.exit(0);
