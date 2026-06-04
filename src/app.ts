@@ -33,6 +33,16 @@ export function buildApp() {
     reply.header('X-Request-Id', req.id);
   });
 
+  // /docs and /metrics are restricted to superadmin (x-admin-key header).
+  // In production, additionally restrict at the network/reverse-proxy level.
+  fastify.addHook('onRequest', async (req, reply) => {
+    if (req.url.startsWith('/docs') || req.url.startsWith('/metrics')) {
+      if (req.headers['x-admin-key'] !== process.env.ADMIN_API_KEY) {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+    }
+  });
+
   fastify.register(helmet);
   fastify.register(cors, { origin: false }); // Webhook + admin API — no browser CORS needed
 

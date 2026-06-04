@@ -7,6 +7,7 @@ import { notifyDLQAlert } from '../services/notification.service';
 import { updateDLQDepth } from '../services/metrics.service';
 import { Sentry } from '../lib/sentry';
 import { captureTenantException } from '../services/tenant-sentry.service';
+import { decryptFromBase64 } from '../crypto';
 import { db } from '../db';
 import type { InboundMessageJob } from '../types';
 
@@ -21,7 +22,17 @@ export function startWorker(): Worker {
   const worker = new Worker<InboundMessageJob>(
     MESSAGE_QUEUE,
     async (job) => {
-      const lockKey = `conv:${job.data.phoneId}`;
+      // Decrypt PII fields that were encrypted by the producer before Redis storage.
+      // `from` is the END USER's phone — decrypt it so processInboundMessage can hash it.
+      const jobData: InboundMessageJob = {
+        ...job.data,
+        from: decryptFromBase64(job.data.from),
+        textBody: job.data.textBody !== undefined ? decryptFromBase64(job.data.textBody) : undefined,
+      };
+
+      // Per-conversation mutex: keyed on (phoneId, from) so two different users
+      // writing to the same business number are never blocked by each other.
+      const lockKey = `conv:${jobData.phoneId}:${jobData.from}`;
       const lockToken = job.id!;
 
       // Per-conversation mutex — ensures messages from the same phone are
@@ -29,8 +40,11 @@ export function startWorker(): Worker {
       // ioredis v5 SET argument order: key, value, 'PX', ttl, 'NX'
       const acquired = await redis.set(lockKey, lockToken, 'PX', LOCK_TTL_MS, 'NX');
       if (!acquired) {
-        const lockRetries = (job.data.lockRetries ?? 0) + 1;
+        const lockRetries = (jobData.lockRetries ?? 0) + 1;
         if (lockRetries <= MAX_LOCK_RETRIES) {
+          // Re-enqueue the already-decrypted job data with the incremented retry counter.
+          // The producer would re-encrypt; here we re-enqueue the RAW (still-encrypted)
+          // payload from job.data to avoid double-encrypt on reschedule.
           await messageQueue.add('process', { ...job.data, lockRetries }, {
             delay: LOCK_RETRY_BASE_MS * lockRetries,
           });
@@ -41,7 +55,7 @@ export function startWorker(): Worker {
       }
 
       try {
-        await processInboundMessage(job.data);
+        await processInboundMessage(jobData);
       } finally {
         // Release only if we still own the lock (guards against TTL expiry + reacquire)
         const owner = await redis.get(lockKey);

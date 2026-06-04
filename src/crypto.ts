@@ -169,3 +169,33 @@ export function encryptJson(obj: unknown): Buffer {
 export function decryptJson<T = unknown>(data: Buffer | Uint8Array): T {
   return JSON.parse(decrypt(data)) as T;
 }
+
+/**
+ * Encrypt a string and return a base64-encoded string — useful for
+ * JSON-serializable contexts such as BullMQ job payloads stored in Redis.
+ */
+export function encryptToBase64(plaintext: string): string {
+  return encrypt(plaintext).toString('base64');
+}
+
+/** Inverse of encryptToBase64. */
+export function decryptFromBase64(b64: string): string {
+  return decrypt(Buffer.from(b64, 'base64'));
+}
+
+/**
+ * Read the KID stored in an encrypted blob without fully decrypting it.
+ * Returns 0 for legacy-format blobs (no KID header).
+ * Used by the re-encryption endpoint to skip blobs already on the current KID.
+ */
+export function getStoredKid(data: Buffer | Uint8Array): number {
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (
+    buf.length >= NEW_FORMAT_MIN &&
+    buf[0] === MAGIC[0] &&
+    buf[1] === MAGIC[1]
+  ) {
+    return buf[MAGIC_LEN];
+  }
+  return 0; // legacy format — treated as KID 0
+}

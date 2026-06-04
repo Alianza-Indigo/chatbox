@@ -15,7 +15,7 @@ vi.mock('../src/db', () => ({
   db: {
     endUser: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), upsert: vi.fn() },
     consent: { findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
-    message: { create: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
+    message: { create: vi.fn(), upsert: vi.fn().mockResolvedValue({ id: 'msg-in-1' }), findMany: vi.fn(), deleteMany: vi.fn() },
     crisisEvent: { create: vi.fn(), deleteMany: vi.fn() },
     bot: { update: vi.fn() },
     feedback: { deleteMany: vi.fn() },

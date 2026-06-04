@@ -367,6 +367,17 @@ async function persistMessage(
   body: string,
   externalId?: string,
 ): Promise<{ id: string }> {
+  if (direction === 'in' && externalId) {
+    // Upsert on externalId (waMessageId): if the same inbound message was
+    // already persisted in a previous attempt (e.g. LLM failed after persist),
+    // the retry silently reuses the existing row instead of creating a duplicate.
+    return db.message.upsert({
+      where: { externalId },
+      create: { botId, endUserId, direction, inputType, bodyEnc: encrypt(body), externalId },
+      update: {},
+      select: { id: true },
+    });
+  }
   return db.message.create({
     data: { botId, endUserId, direction, inputType, bodyEnc: encrypt(body), externalId: externalId ?? null },
     select: { id: true },
