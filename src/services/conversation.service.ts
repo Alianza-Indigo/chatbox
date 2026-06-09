@@ -154,32 +154,50 @@ export async function processInboundMessage(job: InboundMessageJob): Promise<voi
 
   await persistMessage(bot.id, endUser.id, 'in', job.messageType === 'audio' ? 'voice' : 'text', inputText, job.waMessageId);
 
+  // ── Outbound idempotency ─────────────────────────────────────────────────
+  // If a previous attempt already ran the LLM + persisted the outbound message
+  // but failed before/during sendText, re-use the stored body instead of calling
+  // the LLM again. This prevents duplicate charges and inconsistent responses.
+  const outboundExternalId = `out-${job.waMessageId}`;
+  const existingOut = await db.message.findUnique({
+    where: { externalId: outboundExternalId },
+    select: { id: true, bodyEnc: true },
+  });
+
   let responseText: string;
-  try {
-    const result = await llmProvider.complete({
-      systemPrompt,
-      history,
-      userMessage: inputText,
-      params: (bot.llmParams as Record<string, unknown> | null) ?? undefined,
-      apiKey,
-      model: bot.llmModel,
-    });
-    responseText = result.text;
-  } catch (err) {
-    await handleLLMError(err, bot.id, bot.name, bot.orgId, channelProvider, channel.phoneId, channelCreds, job.from);
-    return;
+  let outMsg: { id: string };
+
+  if (existingOut) {
+    responseText = decrypt(existingOut.bodyEnc);
+    outMsg = existingOut;
+  } else {
+    try {
+      const result = await llmProvider.complete({
+        systemPrompt,
+        history,
+        userMessage: inputText,
+        params: (bot.llmParams as Record<string, unknown> | null) ?? undefined,
+        apiKey,
+        model: bot.llmModel,
+      });
+      responseText = result.text;
+    } catch (err) {
+      await handleLLMError(err, bot.id, bot.name, bot.orgId, channelProvider, channel.phoneId, channelCreds, job.from);
+      return;
+    }
+
+    // ── Step 9: SafetyClassifier on OUTPUT (independent of client's LLM) ──
+    const outputSafety = await safetyClassifier.classifyAsync(responseText, bot.safetyLevel as SafetyLevel);
+    if (outputSafety.isCrisis) {
+      recordSafetyBlock('output_filtered');
+      responseText = buildCrisisMessage(bot.crisisConfig);
+      await recordCrisisEvent(bot.id, endUser.id, outputSafety.category ?? 'unknown', 'output_filtered');
+    }
+
+    outMsg = await persistMessage(bot.id, endUser.id, 'out', 'text', responseText, outboundExternalId);
   }
 
-  // ── Step 9: SafetyClassifier on OUTPUT (independent of client's LLM) ───
-  const outputSafety = await safetyClassifier.classifyAsync(responseText, bot.safetyLevel as SafetyLevel);
-  if (outputSafety.isCrisis) {
-    recordSafetyBlock('output_filtered');
-    responseText = buildCrisisMessage(bot.crisisConfig);
-    await recordCrisisEvent(bot.id, endUser.id, outputSafety.category ?? 'unknown', 'output_filtered');
-  }
-
-  // ── Step 10: Persist + send ───────────────────────────────────────────────
-  const outMsg = await persistMessage(bot.id, endUser.id, 'out', 'text', responseText);
+  // ── Step 10: Send ────────────────────────────────────────────────────────
   await channelProvider.sendText({ phoneId: channel.phoneId, accessToken: channelCreds.accessToken, to: job.from, text: responseText, apiVersion: config.META_API_VERSION });
   recordMessageProcessed();
 

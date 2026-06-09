@@ -20,6 +20,7 @@ vi.mock('../src/db', () => ({
       upsert: vi.fn().mockResolvedValue({ id: 'msg-in-1' }),
       create: vi.fn().mockResolvedValue({ id: 'msg-out-1' }),
       findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn().mockResolvedValue(null),
     },
     crisisEvent: { create: vi.fn() },
     bot: { update: vi.fn() },
@@ -161,8 +162,10 @@ describe('Resilience — lock, idempotency, deduplication', () => {
 
     const job = makeJob('+521112223333');
 
-    // First attempt: inbound persisted, then LLM throws
+    // First attempt: inbound persisted, then LLM throws before outbound is persisted
+    // findUnique returns null (no outbound yet) so LLM is invoked and fails
     (db.message.upsert as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'msg-in-1' });
+    (db.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
     mockLLMComplete.mockRejectedValueOnce(new Error('LLM timeout'));
 
     await expect(processInboundMessage(job)).rejects.toThrow('LLM timeout');
@@ -174,8 +177,9 @@ describe('Resilience — lock, idempotency, deduplication', () => {
       }),
     );
 
-    // Second attempt (retry): upsert returns same message, LLM succeeds
+    // Second attempt: findUnique still null (outbound never persisted), LLM succeeds
     (db.message.upsert as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'msg-in-1' });
+    (db.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
     (db.message.create as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'msg-out-1' });
     mockLLMComplete.mockResolvedValueOnce({ text: 'Respuesta', usage: {} });
 
@@ -189,29 +193,33 @@ describe('Resilience — lock, idempotency, deduplication', () => {
 
   // ── 3. Retry after WhatsApp send failure ─────────────────────────────────
 
-  it('retries the full flow when WhatsApp send fails — output message is re-created on retry', async () => {
+  it('re-sends the already-persisted response on retry without calling LLM again', async () => {
     const { processInboundMessage } = await import('../src/services/conversation.service');
     const { db } = await import('../src/db');
 
     const job = makeJob('+521112223333', 'dime algo interesante');
 
-    // First attempt: persist in, LLM ok, send fails
+    // First attempt: LLM ok, outbound persisted, but sendText fails
     (db.message.upsert as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'msg-in-1' });
+    (db.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null); // no outbound yet
     (db.message.create as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'msg-out-1' });
     mockSendText.mockRejectedValueOnce(new Error('WhatsApp 503'));
 
     await expect(processInboundMessage(job)).rejects.toThrow('WhatsApp 503');
 
-    // Second attempt: inbound already persisted (upsert noop), output re-created
-    (db.message.create as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'msg-out-2' });
+    // Second attempt: findUnique finds the already-persisted outbound → skip LLM → re-send
+    (db.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'msg-out-1',
+      bodyEnc: Buffer.from('enc'),
+    });
     mockSendText.mockResolvedValue(undefined);
 
     await processInboundMessage(job);
 
-    // Inbound upserted twice (idempotent), outbound created once per attempt
-    expect(db.message.upsert).toHaveBeenCalledTimes(2);
-    expect(db.message.create).toHaveBeenCalledTimes(2); // one per attempt — known limitation
-    expect(mockSendText).toHaveBeenCalledTimes(2); // failed + succeeded
+    expect(db.message.upsert).toHaveBeenCalledTimes(2);       // inbound idempotent on both attempts
+    expect(db.message.create).toHaveBeenCalledTimes(1);       // outbound persisted only once
+    expect(mockLLMComplete).toHaveBeenCalledTimes(1);         // LLM not called on retry
+    expect(mockSendText).toHaveBeenCalledTimes(2);            // failed + succeeded
   });
 
   // ── 4. Duplicate webhook deduplication ───────────────────────────────────
