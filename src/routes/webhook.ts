@@ -3,6 +3,8 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { config } from '../config';
 import { enqueueInboundMessage } from '../queue/producer';
 import { getChannelProvider } from '../providers/channel';
+import { recordStaleWebhook } from '../services/metrics.service';
+import { logger } from '../logger';
 
 // The Meta Cloud provider parses any Meta-formatted webhook
 const metaProvider = getChannelProvider('meta_cloud');
@@ -50,7 +52,18 @@ const webhookRoutes: FastifyPluginAsync = async (fastify) => {
 
 async function processPayload(body: unknown, requestId: string): Promise<void> {
   const { messages } = metaProvider.parseInbound(body);
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const replayWindow = config.WEBHOOK_REPLAY_WINDOW_SECS;
+
   for (const msg of messages) {
+    // Replay-protection: skip messages whose timestamp is outside the allowed window.
+    // This guards against replayed webhook deliveries. A window of 0 disables the check.
+    if (replayWindow > 0 && msg.timestamp && nowSecs - msg.timestamp > replayWindow) {
+      logger.warn({ waMessageId: msg.messageId, ageSecs: nowSecs - msg.timestamp, replayWindow }, 'stale webhook message skipped');
+      recordStaleWebhook();
+      continue;
+    }
+
     await enqueueInboundMessage({
       phoneId: msg.phoneId,
       waMessageId: msg.messageId,

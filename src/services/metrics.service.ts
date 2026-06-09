@@ -85,6 +85,50 @@ export const messagesProcessed = new Counter({
   registers: [registry],
 });
 
+export const promptInjectionBlocks = new Counter({
+  name: 'chatbox_prompt_injection_blocks_total',
+  help: 'Messages blocked due to detected prompt injection attempts',
+  labelNames: ['type'] as const,
+  registers: [registry],
+});
+
+export const staleWebhooks = new Counter({
+  name: 'chatbox_stale_webhooks_total',
+  help: 'Inbound webhook messages skipped because their timestamp exceeded the replay window',
+  registers: [registry],
+});
+
+// ─── Per-tenant counters ──────────────────────────────────────────────────────
+// These provide per-org observability without modifying the existing global metrics.
+
+export const orgMessagesProcessed = new Counter({
+  name: 'chatbox_org_messages_processed_total',
+  help: 'Messages fully processed per organization',
+  labelNames: ['org_id'] as const,
+  registers: [registry],
+});
+
+export const orgQuotaBlocks = new Counter({
+  name: 'chatbox_org_quota_blocks_total',
+  help: 'Quota-exceeded blocks per organization',
+  labelNames: ['org_id'] as const,
+  registers: [registry],
+});
+
+export const orgSafetyBlocks = new Counter({
+  name: 'chatbox_org_safety_blocks_total',
+  help: 'Safety blocks per organization and action',
+  labelNames: ['org_id', 'action_taken'] as const,
+  registers: [registry],
+});
+
+export const orgLlmErrors = new Counter({
+  name: 'chatbox_org_llm_errors_total',
+  help: 'LLM errors per organization, provider, and error type',
+  labelNames: ['org_id', 'provider', 'error_type'] as const,
+  registers: [registry],
+});
+
 // ─── Cost estimation table (USD per 1M tokens, Q1 2025) ──────────────────────
 // Keys are substrings matched against the model name (longest match wins).
 
@@ -150,16 +194,31 @@ export function recordMetaError(statusCode: number): void {
   metaApiErrors.inc({ status_code: String(statusCode) });
 }
 
-export function recordQuotaBlock(): void {
+export function recordQuotaBlock(orgId?: string): void {
   quotaBlocks.inc();
+  if (orgId) orgQuotaBlocks.inc({ org_id: orgId });
 }
 
-export function recordSafetyBlock(actionTaken: string): void {
+export function recordSafetyBlock(actionTaken: string, orgId?: string): void {
   safetyBlocks.inc({ action_taken: actionTaken });
+  if (orgId) orgSafetyBlocks.inc({ org_id: orgId, action_taken: actionTaken });
 }
 
-export function recordMessageProcessed(): void {
+export function recordMessageProcessed(orgId?: string): void {
   messagesProcessed.inc();
+  if (orgId) orgMessagesProcessed.inc({ org_id: orgId });
+}
+
+export function recordPromptInjectionBlock(type: string): void {
+  promptInjectionBlocks.inc({ type });
+}
+
+export function recordStaleWebhook(): void {
+  staleWebhooks.inc();
+}
+
+export function recordOrgLlmError(orgId: string, provider: string, errorType: string): void {
+  orgLlmErrors.inc({ org_id: orgId, provider, error_type: errorType });
 }
 
 export function updateDLQDepth(depth: number): void {

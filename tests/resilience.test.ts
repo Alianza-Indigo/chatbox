@@ -68,6 +68,7 @@ vi.mock('../src/queue/queue', () => ({
 vi.mock('../src/services/metrics.service', () => ({
   recordLLMUsage: vi.fn(), recordLLMError: vi.fn(), recordMetaError: vi.fn(),
   recordQuotaBlock: vi.fn(), recordSafetyBlock: vi.fn(), recordMessageProcessed: vi.fn(),
+  recordPromptInjectionBlock: vi.fn(), recordStaleWebhook: vi.fn(), recordOrgLlmError: vi.fn(),
   updateDLQDepth: vi.fn(),
 }));
 

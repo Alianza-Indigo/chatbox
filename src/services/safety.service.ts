@@ -50,6 +50,18 @@ Response format:
 // 'minimal'  — keyword scan only, never escalate to LLM
 export type SafetyLevel = 'strict' | 'standard' | 'minimal';
 
+/**
+ * Thrown when safetyLevel='strict' AND SAFETY_FAIL_CLOSED=true AND the LLM
+ * classifier is unavailable. The caller should block the message and inform
+ * the user that the service is temporarily unavailable.
+ */
+export class SafetyServiceUnavailableError extends Error {
+  constructor() {
+    super('Safety LLM classifier unavailable (fail-closed mode active)');
+    this.name = 'SafetyServiceUnavailableError';
+  }
+}
+
 export class SafetyClassifier {
   private llmClient?: Anthropic;
   private llmClientKey?: string; // track which key the cached client was built with
@@ -78,7 +90,11 @@ export class SafetyClassifier {
     try {
       return await this.classifyWithLLM(text, platformKey);
     } catch {
-      // Classifier error: fail open (keyword result) rather than blocking all messages
+      // Fail-closed mode: strict bots block the message when the LLM classifier is down.
+      // Default is fail-open (keyword result) to avoid blocking normal conversations.
+      if (safetyLevel === 'strict' && process.env.SAFETY_FAIL_CLOSED === 'true') {
+        throw new SafetyServiceUnavailableError();
+      }
       return keywordResult;
     }
   }

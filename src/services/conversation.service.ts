@@ -1,5 +1,5 @@
 import { createHmac, createHash } from 'crypto';
-import type { BotCommand, BotCrisisConfig, BotKnowledge, BotIntegration } from '@prisma/client';
+import type { BotCommand, BotCrisisConfig, BotKnowledge, BotIntegration, MessageInputType, MessageDirection } from '@prisma/client';
 import { db } from '../db';
 import { decrypt, decryptJson, encrypt } from '../crypto';
 import { config } from '../config';
@@ -11,11 +11,14 @@ import { captureTenantException } from './tenant-sentry.service';
 import * as consentService from './consent.service';
 import { getRelevantKnowledge } from './knowledge.service';
 import { tryIncrementQuota } from './quota.service';
-import { recordQuotaBlock, recordSafetyBlock, recordMessageProcessed } from './metrics.service';
+import { recordQuotaBlock, recordSafetyBlock, recordMessageProcessed, recordPromptInjectionBlock, recordOrgLlmError } from './metrics.service';
 import { downloadMedia } from './media.service';
 import { getLLMProvider, LLMCredentialError, LLMRateLimitError } from '../providers/llm';
 import { getChannelProvider } from '../providers/channel';
 import { getTranscriber, SttCredentialError } from '../providers/stt';
+import { detectPromptInjection } from '../lib/prompt-guard';
+import { SafetyServiceUnavailableError } from './safety.service';
+import { logger } from '../logger';
 import type { InboundMessageJob, LLMMessage, MetaCloudCredentials, ClassificationResult } from '../types';
 
 const ARCO_TRIGGERS = [
@@ -113,10 +116,28 @@ export async function processInboundMessage(job: InboundMessageJob): Promise<voi
 
   if (!inputText) return;
 
+  // ── Step 5b: Prompt injection detection ─────────────────────────────────
+  const injection = detectPromptInjection(inputText);
+  if (injection.detected) {
+    logger.warn({ botId: bot.id, orgId: bot.orgId, injectionType: injection.type }, 'prompt injection attempt blocked');
+    recordPromptInjectionBlock(injection.type!);
+    await channelProvider.sendText({ phoneId: channel.phoneId, accessToken: channelCreds.accessToken, to: job.from, text: 'Lo siento, no puedo procesar ese tipo de solicitud.', apiVersion: config.META_API_VERSION });
+    return;
+  }
+
   // ── Step 6: SafetyClassifier on INPUT (full async check with LLM tier) ──
-  const inputSafety = await safetyClassifier.classifyAsync(inputText, bot.safetyLevel as SafetyLevel);
+  let inputSafety: ClassificationResult;
+  try {
+    inputSafety = await safetyClassifier.classifyAsync(inputText, bot.safetyLevel as SafetyLevel);
+  } catch (err) {
+    if (err instanceof SafetyServiceUnavailableError) {
+      await channelProvider.sendText({ phoneId: channel.phoneId, accessToken: channelCreds.accessToken, to: job.from, text: 'El servicio no está disponible en este momento. Intenta de nuevo más tarde.', apiVersion: config.META_API_VERSION });
+      return;
+    }
+    throw err;
+  }
   if (inputSafety.isCrisis) {
-    recordSafetyBlock('input_detected');
+    recordSafetyBlock('input_detected', bot.orgId);
     await handleCrisis(bot.id, bot.crisisConfig, endUser.id, channelProvider, channel.phoneId, channelCreds, job.from, inputSafety, 'input_detected');
     return;
   }
@@ -132,7 +153,7 @@ export async function processInboundMessage(job: InboundMessageJob): Promise<voi
     return;
   }
   if (!withinQuota) {
-    recordQuotaBlock();
+    recordQuotaBlock(bot.orgId);
     await channelProvider.sendText({ phoneId: channel.phoneId, accessToken: channelCreds.accessToken, to: job.from, text: 'El servicio ha alcanzado su límite mensual de mensajes. Contacta al administrador.', apiVersion: config.META_API_VERSION });
     return;
   }
@@ -187,9 +208,19 @@ export async function processInboundMessage(job: InboundMessageJob): Promise<voi
     }
 
     // ── Step 9: SafetyClassifier on OUTPUT (independent of client's LLM) ──
-    const outputSafety = await safetyClassifier.classifyAsync(responseText, bot.safetyLevel as SafetyLevel);
+    let outputSafety: ClassificationResult;
+    try {
+      outputSafety = await safetyClassifier.classifyAsync(responseText, bot.safetyLevel as SafetyLevel);
+    } catch (err) {
+      if (err instanceof SafetyServiceUnavailableError) {
+        // Replace response with crisis message to be safe — output is untested
+        outputSafety = { isCrisis: true, category: 'safety_unavailable' };
+      } else {
+        throw err;
+      }
+    }
     if (outputSafety.isCrisis) {
-      recordSafetyBlock('output_filtered');
+      recordSafetyBlock('output_filtered', bot.orgId);
       responseText = buildCrisisMessage(bot.crisisConfig);
       await recordCrisisEvent(bot.id, endUser.id, outputSafety.category ?? 'unknown', 'output_filtered');
     }
@@ -199,7 +230,7 @@ export async function processInboundMessage(job: InboundMessageJob): Promise<voi
 
   // ── Step 10: Send ────────────────────────────────────────────────────────
   await channelProvider.sendText({ phoneId: channel.phoneId, accessToken: channelCreds.accessToken, to: job.from, text: responseText, apiVersion: config.META_API_VERSION });
-  recordMessageProcessed();
+  recordMessageProcessed(bot.orgId);
 
   // ── Optional feedback collection ─────────────────────────────────────────
   const identity = bot.identity as Record<string, unknown> | null;
@@ -380,8 +411,8 @@ function buildSystemPrompt(
 async function persistMessage(
   botId: string,
   endUserId: string,
-  direction: 'in' | 'out',
-  inputType: string,
+  direction: MessageDirection,
+  inputType: MessageInputType,
   body: string,
   externalId?: string,
 ): Promise<{ id: string }> {
@@ -450,15 +481,18 @@ async function handleLLMError(
     invalidateBotCache(botId);
     notifyCredentialError({ botId, botName, errorMessage: error.message, detectedAt: new Date() });
     captureTenantException(orgId, error, { botId, botName, errorType: 'credential_error' });
+    recordOrgLlmError(orgId, 'unknown', 'credential_error');
     await channelProvider.sendText({ phoneId, accessToken: creds.accessToken, to, text: 'El servicio no está disponible en este momento. Inténtalo más tarde.', apiVersion: config.META_API_VERSION });
     return;
   }
   if (err instanceof LLMRateLimitError) {
     notifyLLMFailure(botId, botName, error.message);
     captureTenantException(orgId, error, { botId, botName, errorType: 'rate_limit' });
+    recordOrgLlmError(orgId, 'unknown', 'rate_limit');
     throw err;
   }
   notifyLLMFailure(botId, botName, error.message);
   captureTenantException(orgId, error, { botId, botName, errorType: 'llm_error' });
+  recordOrgLlmError(orgId, 'unknown', 'llm_error');
   throw err;
 }
