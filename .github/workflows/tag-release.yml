@@ -36,11 +36,20 @@ jobs:
           echo "$BODY"     >> "$GITHUB_OUTPUT"
           echo "EOF"       >> "$GITHUB_OUTPUT"
 
-      - name: Create tag and GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ inputs.version }}" \
-            --title "${{ inputs.version }}" \
-            --notes "${{ steps.changelog.outputs.body }}" \
-            --target "${{ github.ref_name }}"
+          VERSION="${{ inputs.version }}"
+          NOTES="${{ steps.changelog.outputs.body }}"
+
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            gh release edit "$VERSION" \
+              --title "$VERSION" \
+              --notes "$NOTES"
+          else
+            gh release create "$VERSION" \
+              --title "$VERSION" \
+              --notes "$NOTES" \
+              --target "${{ github.ref_name }}"
+          fi
