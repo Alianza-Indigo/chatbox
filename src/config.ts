@@ -29,6 +29,12 @@ const schema = z.object({
   // the active key for new encryptions. Falls back to FIELD_ENCRYPTION_KEY (kid 0).
   ENCRYPTION_KEYS: z.string().optional(),
   ENCRYPTION_CURRENT_KID: z.coerce.number().int().min(0).default(0),
+  // Safety fail-closed: when 'true', bots with safetyLevel='strict' block the message
+  // if the LLM safety classifier is unavailable, instead of falling back to keyword-only.
+  SAFETY_FAIL_CLOSED: z.string().optional().transform(v => v?.toLowerCase() === 'true'),
+  // Meta webhook replay-protection window in seconds (0 = disabled).
+  // Messages with a timestamp older than this are logged as stale and skipped.
+  WEBHOOK_REPLAY_WINDOW_SECS: z.coerce.number().int().min(0).default(300),
 });
 
 function loadConfig() {

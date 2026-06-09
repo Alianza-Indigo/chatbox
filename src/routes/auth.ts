@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { db } from '../db';
 import { hashPassword, verifyPassword, signToken } from '../services/auth.service';
 import { parseBody, RegisterSchema, LoginSchema } from '../lib/validate';
+import { logAudit } from '../services/audit.service';
 
 const authRoutes: FastifyPluginAsync = async (fastify) => {
   // Create org + owner account — 5 registrations per hour per IP
@@ -39,6 +40,15 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     if (!valid) return reply.status(401).send({ error: 'Invalid credentials' });
 
     const token = signToken({ sub: user.id, orgId: user.orgId, role: user.role });
+    logAudit({
+      orgId: user.orgId,
+      actorId: user.id,
+      actorRole: user.role,
+      action: 'auth.login',
+      targetType: 'org_user',
+      targetId: user.id,
+      ip: req.ip,
+    });
     return reply.send({ token, orgId: user.orgId, userId: user.id, role: user.role, expiresIn: '7d' });
   });
 };

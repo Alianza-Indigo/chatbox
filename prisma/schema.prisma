@@ -7,14 +7,63 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum OrgPlan {
+  free
+  pro
+  enterprise
+}
+
+enum OrgUserRole {
+  owner
+  admin
+  editor
+}
+
+enum BotStatus {
+  draft
+  active
+  paused
+  credential_error
+}
+
+enum BotSafetyLevel {
+  strict
+  standard
+  minimal
+}
+
+enum ChannelStatus {
+  connected
+  pending
+  error
+}
+
+enum MessageDirection {
+  in
+  out
+}
+
+enum MessageInputType {
+  text
+  voice
+  interactive
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
 model Organization {
   id                 String   @id @default(uuid())
   name               String
-  plan               String   @default("free") // 'free' | 'pro' | 'enterprise'
+  plan               OrgPlan  @default(free) @map("plan")
   msgQuota           Int      @default(1000) @map("msg_quota") // 0 = unlimited
   msgUsed            Int      @default(0) @map("msg_used")
   currentPeriodStart DateTime @default(now()) @map("current_period_start")
   sentryDsnEnc       Bytes?   @map("sentry_dsn_enc") // AES-256-GCM encrypted; null = tenant Sentry disabled
+  // Retention: null = keep forever. When set, messages older than this many days
+  // should be purged by a periodic maintenance job.
+  msgRetentionDays   Int?     @map("msg_retention_days")
   createdAt          DateTime @default(now()) @map("created_at")
 
   orgUsers OrgUser[]
@@ -24,12 +73,12 @@ model Organization {
 }
 
 model OrgUser {
-  id           String   @id @default(uuid())
-  orgId        String   @map("org_id")
-  email        String   @unique
-  role         String   // 'owner' | 'admin' | 'editor'
-  passwordHash String   @map("password_hash")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id           String      @id @default(uuid())
+  orgId        String      @map("org_id")
+  email        String      @unique
+  role         OrgUserRole @default(editor)
+  passwordHash String      @map("password_hash")
+  createdAt    DateTime    @default(now()) @map("created_at")
 
   org Organization @relation(fields: [orgId], references: [id])
 
@@ -38,23 +87,25 @@ model OrgUser {
 
 // Core entity — every row is a complete chatbot. Config only, no code.
 model Bot {
-  id            String   @id @default(uuid())
-  orgId         String   @map("org_id")
+  id            String         @id @default(uuid())
+  orgId         String         @map("org_id")
   name          String
-  status        String   @default("draft") // 'draft' | 'active' | 'paused' | 'credential_error'
-  locale        String   @default("es-MX")
-  systemPrompt  String?  @map("system_prompt")
+  status        BotStatus      @default(draft)
+  locale        String         @default("es-MX")
+  systemPrompt  String?        @map("system_prompt")
   identity      Json?
-  onboardingMsg String?  @map("onboarding_msg")
-  historyWindow Int      @default(5) @map("history_window")
+  onboardingMsg String?        @map("onboarding_msg")
+  historyWindow Int            @default(5) @map("history_window")
   // LLM chosen by the client — credentials supplied by client, encrypted
-  llmProvider   String?  @map("llm_provider") // 'anthropic' | 'openai' | 'google' | 'mistral' | ...
-  llmModel      String?  @map("llm_model")
-  llmApiKeyEnc  Bytes?   @map("llm_api_key_enc") // AES-256-GCM encrypted
-  llmParams     Json?    @map("llm_params")
-  safetyLevel   String   @default("standard") @map("safety_level") // 'strict' | 'standard' | 'minimal'
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  llmProvider   String?        @map("llm_provider") // 'anthropic' | 'openai' | 'google' | 'mistral' | ...
+  llmModel      String?        @map("llm_model")
+  llmApiKeyEnc  Bytes?         @map("llm_api_key_enc") // AES-256-GCM encrypted
+  llmParams     Json?          @map("llm_params")
+  safetyLevel   BotSafetyLevel @default(standard) @map("safety_level")
+  // Per-bot webhook rate limit (req/min). null = use the global default (60).
+  webhookRateLimit Int?        @map("webhook_rate_limit")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
 
   org            Organization       @relation(fields: [orgId], references: [id])
   branding       BotBranding?
@@ -140,13 +191,13 @@ model BotCrisisConfig {
 }
 
 model Channel {
-  id          String @id @default(uuid())
-  botId       String @map("bot_id")
-  provider    String // 'meta_cloud' | 'embedded_signup' | 'bsp_*'
-  phoneId     String @map("phone_id")
-  credentials Bytes  // AES-256-GCM encrypted JSON {accessToken, businessAccountId}
-  verifyToken String @map("verify_token")
-  status      String @default("pending") // 'connected' | 'pending' | 'error'
+  id          String        @id @default(uuid())
+  botId       String        @map("bot_id")
+  provider    String        // 'meta_cloud' | 'embedded_signup' | 'bsp_*' — kept as String (extensible)
+  phoneId     String        @map("phone_id")
+  credentials Bytes         // AES-256-GCM encrypted JSON {accessToken, businessAccountId}
+  verifyToken String        @map("verify_token")
+  status      ChannelStatus @default(pending)
 
   bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
 
@@ -199,14 +250,14 @@ model Consent {
 }
 
 model Message {
-  id         String   @id @default(uuid())
-  botId      String   @map("bot_id")
-  endUserId  String   @map("end_user_id")
-  direction  String   // 'in' | 'out'
-  inputType  String   @map("input_type") // 'text' | 'voice' | 'interactive'
-  bodyEnc    Bytes    @map("body_enc") // AES-256-GCM encrypted
-  externalId String?  @unique @map("external_id") // WA message_id for idempotency — nullable unique (PostgreSQL allows multiple NULLs)
-  createdAt  DateTime @default(now()) @map("created_at")
+  id         String           @id @default(uuid())
+  botId      String           @map("bot_id")
+  endUserId  String           @map("end_user_id")
+  direction  MessageDirection
+  inputType  MessageInputType @map("input_type")
+  bodyEnc    Bytes            @map("body_enc") // AES-256-GCM encrypted
+  externalId String?          @unique @map("external_id") // WA message_id for idempotency — nullable unique (PostgreSQL allows multiple NULLs)
+  createdAt  DateTime         @default(now()) @map("created_at")
 
   bot      Bot        @relation(fields: [botId], references: [id], onDelete: Cascade)
   endUser  EndUser    @relation(fields: [endUserId], references: [id], onDelete: Cascade)
