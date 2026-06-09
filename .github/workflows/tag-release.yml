@@ -1,0 +1,46 @@
+name: Tag and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v0.3.0)'
+        required: true
+        default: 'v0.3.0'
+
+jobs:
+  tag-and-release:
+    name: Create tag and GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VERSION="${{ inputs.version }}"
+          VERSION_NUM="${VERSION#v}"
+
+          BODY=$(awk "/^## \[${VERSION_NUM}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
+
+          if [ -z "$BODY" ]; then
+            BODY="See CHANGELOG.md for details."
+          fi
+
+          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY"     >> "$GITHUB_OUTPUT"
+          echo "EOF"       >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.version }}" \
+            --title "${{ inputs.version }}" \
+            --notes "${{ steps.changelog.outputs.body }}" \
+            --target "${{ github.ref_name }}"
