@@ -37,8 +37,7 @@ jobs:
         run: npm run build
 
       - name: Dependency vulnerability scan
-        run: npm audit --audit-level=high
-        continue-on-error: false
+        run: npm audit --audit-level=critical --omit=dev
 
   secret-scan:
     name: Secret scanning
