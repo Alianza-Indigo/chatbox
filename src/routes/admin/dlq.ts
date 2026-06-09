@@ -50,13 +50,34 @@ const dlqRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ requeued: true, jobId: req.params.jobId });
   });
 
-  // Discard — permanently remove a job from the DLQ
+  // Discard — permanently remove a single job from the DLQ
   fastify.delete<{ Params: { jobId: string } }>('/dlq/:jobId', async (req, reply) => {
     const job = await dlq.getJob(req.params.jobId);
     if (!job) return reply.status(404).send({ error: 'Job not found in DLQ' });
     await job.remove();
     dlq.getWaitingCount().then(updateDLQDepth).catch(() => { /* non-critical */ });
     return reply.status(204).send();
+  });
+
+  // Bulk purge — remove all DLQ jobs, or only those older than `olderThanHours`.
+  // Omit the query param to drain everything.
+  fastify.delete<{ Querystring: { olderThanHours?: string } }>('/dlq', async (req, reply) => {
+    const hours = req.query.olderThanHours !== undefined ? Number(req.query.olderThanHours) : undefined;
+
+    let removed: number;
+    if (hours !== undefined && hours >= 0) {
+      const graceMs = Math.floor(hours * 3_600_000);
+      // BullMQ clean(grace, limit, type): removes 'wait' jobs older than graceMs
+      const ids = await dlq.clean(graceMs, 1_000_000, 'wait');
+      removed = ids.length;
+    } else {
+      const countBefore = await dlq.getWaitingCount();
+      await dlq.drain();
+      removed = countBefore;
+    }
+
+    dlq.getWaitingCount().then(updateDLQDepth).catch(() => { /* non-critical */ });
+    return reply.send({ removed, olderThanHours: hours ?? null });
   });
 };
 

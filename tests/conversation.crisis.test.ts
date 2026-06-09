@@ -15,7 +15,7 @@ vi.mock('../src/db', () => ({
   db: {
     endUser: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), upsert: vi.fn() },
     consent: { findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
-    message: { create: vi.fn(), upsert: vi.fn().mockResolvedValue({ id: 'msg-in-1' }), findMany: vi.fn(), deleteMany: vi.fn() },
+    message: { create: vi.fn(), upsert: vi.fn().mockResolvedValue({ id: 'msg-in-1' }), findMany: vi.fn(), findUnique: vi.fn().mockResolvedValue(null), deleteMany: vi.fn() },
     crisisEvent: { create: vi.fn(), deleteMany: vi.fn() },
     bot: { update: vi.fn() },
     feedback: { deleteMany: vi.fn() },
@@ -123,6 +123,7 @@ describe('Crisis flow — LLM is never called', () => {
     db.consent.findFirst.mockResolvedValue(mockConsent);
     db.crisisEvent.create.mockResolvedValue({});
     db.message.findMany.mockResolvedValue([]);
+    db.message.findUnique.mockResolvedValue(null);
     db.message.create.mockResolvedValue({});
 
     const llmMod = await import('../src/providers/llm');

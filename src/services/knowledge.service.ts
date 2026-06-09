@@ -2,9 +2,12 @@ import OpenAI from 'openai';
 import { Prisma } from '@prisma/client';
 import type { BotKnowledge } from '@prisma/client';
 import { db } from '../db';
+import { logger } from '../logger';
 
 const SIMILARITY_THRESHOLD = 0.35;
 const TOP_N = 3;
+// Above this threshold the in-process O(N) cosine scan becomes a latency concern
+const INPROCESS_WARN_THRESHOLD = 5_000;
 
 // ─── Embedding codec ──────────────────────────────────────────────────────────
 
@@ -153,6 +156,12 @@ async function semanticRetrieval(
   const queryVec = new Float32Array(await generateEmbedding(query, apiKey));
 
   const withEmbeddings = knowledge.filter(k => k.embeddingData);
+  if (withEmbeddings.length > INPROCESS_WARN_THRESHOLD) {
+    logger.warn(
+      { count: withEmbeddings.length },
+      'knowledge: in-process cosine fallback on large knowledge base — enable pgvector for this bot to avoid latency',
+    );
+  }
   const scored = withEmbeddings.map(k => ({
     entry: k,
     score: cosineSimilarity(queryVec, decodeEmbedding(k.embeddingData!)),
