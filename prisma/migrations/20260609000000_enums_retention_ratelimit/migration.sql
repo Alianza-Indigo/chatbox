@@ -2,47 +2,39 @@
 -- Converts String columns to proper PostgreSQL enums for type safety,
 -- and adds retention + per-bot rate-limit configuration fields.
 
--- CreateEnum: Organization plan
 CREATE TYPE "OrgPlan" AS ENUM ('free', 'pro', 'enterprise');
-
--- CreateEnum: OrgUser role
 CREATE TYPE "OrgUserRole" AS ENUM ('owner', 'admin', 'editor');
-
--- CreateEnum: Bot status
 CREATE TYPE "BotStatus" AS ENUM ('draft', 'active', 'paused', 'credential_error');
-
--- CreateEnum: Bot safety level
 CREATE TYPE "BotSafetyLevel" AS ENUM ('strict', 'standard', 'minimal');
-
--- CreateEnum: Channel status
-CREATE TYPE "ChannelStatus" AS ENUM ('connected', 'pending', 'error');
-
--- CreateEnum: Message direction
+CREATE TYPE "ChannelStatus" AS ENUM ('connected', 'pending', 'error', 'active');
 CREATE TYPE "MessageDirection" AS ENUM ('in', 'out');
-
--- CreateEnum: Message input type
 CREATE TYPE "MessageInputType" AS ENUM ('text', 'voice', 'interactive');
 
--- AlterTable: organizations — convert plan + add retention field
-ALTER TABLE "organizations"
-  ALTER COLUMN "plan" TYPE "OrgPlan" USING "plan"::"OrgPlan",
-  ADD COLUMN "msg_retention_days" INTEGER;
+-- organizations: convert plan (drop default, cast, restore default) + retention field
+ALTER TABLE "organizations" ALTER COLUMN "plan" DROP DEFAULT;
+ALTER TABLE "organizations" ALTER COLUMN "plan" TYPE "OrgPlan" USING "plan"::"OrgPlan";
+ALTER TABLE "organizations" ALTER COLUMN "plan" SET DEFAULT 'free';
+ALTER TABLE "organizations" ADD COLUMN "msg_retention_days" INTEGER;
 
--- AlterTable: org_users — convert role
-ALTER TABLE "org_users"
-  ALTER COLUMN "role" TYPE "OrgUserRole" USING "role"::"OrgUserRole";
+-- org_users: convert role
+ALTER TABLE "org_users" ALTER COLUMN "role" DROP DEFAULT;
+ALTER TABLE "org_users" ALTER COLUMN "role" TYPE "OrgUserRole" USING "role"::"OrgUserRole";
+ALTER TABLE "org_users" ALTER COLUMN "role" SET DEFAULT 'editor';
 
--- AlterTable: bots — convert status + safety_level + add rate limit field
-ALTER TABLE "bots"
-  ALTER COLUMN "status" TYPE "BotStatus" USING "status"::"BotStatus",
-  ALTER COLUMN "safety_level" TYPE "BotSafetyLevel" USING "safety_level"::"BotSafetyLevel",
-  ADD COLUMN "webhook_rate_limit" INTEGER;
+-- bots: convert status + safety_level + rate limit field
+ALTER TABLE "bots" ALTER COLUMN "status" DROP DEFAULT;
+ALTER TABLE "bots" ALTER COLUMN "status" TYPE "BotStatus" USING "status"::"BotStatus";
+ALTER TABLE "bots" ALTER COLUMN "status" SET DEFAULT 'draft';
+ALTER TABLE "bots" ALTER COLUMN "safety_level" DROP DEFAULT;
+ALTER TABLE "bots" ALTER COLUMN "safety_level" TYPE "BotSafetyLevel" USING "safety_level"::"BotSafetyLevel";
+ALTER TABLE "bots" ALTER COLUMN "safety_level" SET DEFAULT 'standard';
+ALTER TABLE "bots" ADD COLUMN "webhook_rate_limit" INTEGER;
 
--- AlterTable: channels — convert status
-ALTER TABLE "channels"
-  ALTER COLUMN "status" TYPE "ChannelStatus" USING "status"::"ChannelStatus";
+-- channels: convert status (original default is 'active')
+ALTER TABLE "channels" ALTER COLUMN "status" DROP DEFAULT;
+ALTER TABLE "channels" ALTER COLUMN "status" TYPE "ChannelStatus" USING "status"::"ChannelStatus";
+ALTER TABLE "channels" ALTER COLUMN "status" SET DEFAULT 'active';
 
--- AlterTable: messages — convert direction + input_type
-ALTER TABLE "messages"
-  ALTER COLUMN "direction" TYPE "MessageDirection" USING "direction"::"MessageDirection",
-  ALTER COLUMN "input_type" TYPE "MessageInputType" USING "input_type"::"MessageInputType";
+-- messages: convert direction + input_type (no defaults on these columns)
+ALTER TABLE "messages" ALTER COLUMN "direction" TYPE "MessageDirection" USING "direction"::"MessageDirection";
+ALTER TABLE "messages" ALTER COLUMN "input_type" TYPE "MessageInputType" USING "input_type"::"MessageInputType";
