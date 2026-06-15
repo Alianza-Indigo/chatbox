@@ -143,6 +143,12 @@ const COST_INPUT_PER_M: [string, number][] = [
   ['gpt-4o', 2.50],
   ['gpt-4', 30.0],
   ['gpt-3.5', 0.50],
+  ['gemini-3.1-flash-lite', 0.10],
+  ['flash-lite', 0.10],
+  ['gemini-3.1-flash', 0.30],
+  ['gemini-flash', 0.30],
+  ['gemini-pro', 1.25],
+  ['gemini', 0.30],
 ];
 
 const COST_OUTPUT_PER_M: [string, number][] = [
@@ -156,6 +162,12 @@ const COST_OUTPUT_PER_M: [string, number][] = [
   ['gpt-4o', 10.0],
   ['gpt-4', 60.0],
   ['gpt-3.5', 1.50],
+  ['gemini-3.1-flash-lite', 0.40],
+  ['flash-lite', 0.40],
+  ['gemini-3.1-flash', 2.50],
+  ['gemini-flash', 2.50],
+  ['gemini-pro', 10.0],
+  ['gemini', 2.50],
 ];
 
 function lookupCost(table: [string, number][], model: string): number {
