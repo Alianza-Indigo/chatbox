@@ -8,9 +8,7 @@ builder = "nixpacks"
 buildCommand = "npm ci && npx prisma generate && npm run build"
 
 [deploy]
-# Runs `prisma migrate deploy` before each release goes live. Railway's key is
-# `preDeployCommand` (NOT `releaseCommand`, which is a Heroku/Render term and is ignored).
-preDeployCommand = "node dist/migrate.js"
+releaseCommand = "node dist/migrate.js"
 startCommand = "sh -c 'npm run ${START_SCRIPT}'"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3

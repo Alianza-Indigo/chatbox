@@ -15,7 +15,7 @@ Multi-tenant WhatsApp chatbot platform backend. Clientes traen sus propias crede
 src/
   server.ts          — entry point HTTP
   worker.ts          — entry point BullMQ consumer
-  migrate.ts         — entry point Railway preDeployCommand (prisma migrate deploy)
+  migrate.ts         — entry point Railway releaseCommand
   app.ts             — Fastify app (swagger, metrics, sentry, requestId)
   config.ts          — zod env validation
   crypto.ts          — AES-256-GCM, kid versioning, encryptToBase64/decryptFromBase64
@@ -137,7 +137,7 @@ PUBLIC_BASE_URL=<https://api.tu-dominio.com>  # requerido para activación autom
 
 ## Railway deployment
 
-- **Servicio API**: usa `railway.toml` tal cual. `preDeployCommand = "node dist/migrate.js"` corre `prisma migrate deploy` antes de cada release. (Railway ignora `releaseCommand` — es término de Heroku/Render.)
+- **Servicio API**: usa `railway.toml` tal cual. `releaseCommand = "node dist/migrate.js"` corre migraciones antes del deploy.
 - **Servicio Worker**: crear manualmente en Railway UI → mismo repo → `startCommand = "node dist/worker.js"` → sin healthcheck ni puerto público.
 - Ambos servicios comparten `DATABASE_URL` y `REDIS_URL`.
 
