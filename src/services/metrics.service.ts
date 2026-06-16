@@ -98,6 +98,20 @@ export const staleWebhooks = new Counter({
   registers: [registry],
 });
 
+export const membershipBlocks = new Counter({
+  name: 'chatbox_membership_blocks_total',
+  help: 'Messages blocked by the end-user paywall (microsaas mode) per organization',
+  labelNames: ['org_id'] as const,
+  registers: [registry],
+});
+
+export const membershipActivations = new Counter({
+  name: 'chatbox_membership_activations_total',
+  help: 'End-user memberships activated via a payment-provider webhook per organization',
+  labelNames: ['org_id'] as const,
+  registers: [registry],
+});
+
 // ─── Per-tenant counters ──────────────────────────────────────────────────────
 // These provide per-org observability without modifying the existing global metrics.
 
@@ -227,6 +241,14 @@ export function recordPromptInjectionBlock(type: string): void {
 
 export function recordStaleWebhook(): void {
   staleWebhooks.inc();
+}
+
+export function recordMembershipBlock(orgId: string): void {
+  membershipBlocks.inc({ org_id: orgId });
+}
+
+export function recordMembershipActivation(orgId: string): void {
+  membershipActivations.inc({ org_id: orgId });
 }
 
 export function recordOrgLlmError(orgId: string, provider: string, errorType: string): void {

@@ -118,6 +118,7 @@ model Bot {
   endUsers       EndUser[]
   messages       Message[]
   crisisEvents   CrisisEvent[]
+  payments       Payment[]
 
   @@map("bots")
 }
@@ -219,22 +220,52 @@ model BotIntegration {
 }
 
 model EndUser {
-  id               String   @id @default(uuid())
-  botId            String   @map("bot_id")
-  waPhoneHash      String   @map("wa_phone_hash") // HMAC-SHA256(phone, PHONE_HASH_SECRET) — never stored in clear
+  id               String    @id @default(uuid())
+  botId            String    @map("bot_id")
+  waPhoneHash      String    @map("wa_phone_hash") // HMAC-SHA256(phone, PHONE_HASH_SECRET) — never stored in clear
   locale           String?
-  paused           Boolean  @default(false)
-  consentDeclined  Boolean  @default(false) @map("consent_declined")
-  createdAt        DateTime @default(now()) @map("created_at")
+  paused           Boolean   @default(false)
+  consentDeclined  Boolean   @default(false) @map("consent_declined")
+  // Microsaas mode (per-bot membership): lifetime free interactions consumed and
+  // current paid-membership expiry. Both are ignored when the bot is in traditional mode.
+  freeMsgUsed      Int       @default(0) @map("free_msg_used")
+  membershipUntil  DateTime? @map("membership_until")
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   bot          Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
   consents     Consent[]
   messages     Message[]
   crisisEvents CrisisEvent[]
   feedback     Feedback[]
+  payments     Payment[]
 
   @@unique([botId, waPhoneHash])
   @@map("end_users")
+}
+
+// Membership purchase by an end-user (microsaas mode). The platform never holds
+// payment credentials: each bot brings its own payment-provider token (stored as a
+// BotIntegration kind='payments'). A row is created when the checkout link is built
+// and flipped to 'approved' by the provider webhook, which activates the membership.
+model Payment {
+  id             String    @id @default(uuid())
+  botId          String    @map("bot_id")
+  endUserId      String    @map("end_user_id")
+  provider       String    @default("mercadopago")
+  providerRef    String?   @map("provider_ref") // preference id, then payment id once paid
+  checkoutUrl    String?   @map("checkout_url") // init_point — reused while still pending
+  status         String    @default("pending") // pending | approved | rejected
+  amount         Decimal?  @db.Decimal(12, 2)
+  currency       String?
+  membershipDays Int       @map("membership_days")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  paidAt         DateTime? @map("paid_at")
+
+  bot     Bot     @relation(fields: [botId], references: [id], onDelete: Cascade)
+  endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+
+  @@index([endUserId, status, createdAt])
+  @@map("payments")
 }
 
 model Consent {

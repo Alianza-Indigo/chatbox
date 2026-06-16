@@ -35,6 +35,10 @@ const schema = z.object({
   // Meta webhook replay-protection window in seconds (0 = disabled).
   // Messages with a timestamp older than this are logged as stale and skipped.
   WEBHOOK_REPLAY_WINDOW_SECS: z.coerce.number().int().min(0).default(300),
+  // Public base URL of the API (e.g. https://api.example.com). Required for
+  // microsaas mode: it builds the payment-provider notification_url so memberships
+  // activate automatically. Omit to disable automatic activation (manual reconcile).
+  PUBLIC_BASE_URL: z.string().url().optional(),
 });
 
 function loadConfig() {

@@ -11,6 +11,7 @@ import { registry } from './services/metrics.service';
 import { Sentry } from './lib/sentry';
 import { openApiSpec } from './openapi';
 import webhookRoutes from './routes/webhook';
+import paymentRoutes from './routes/payments';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin/index';
 
@@ -83,6 +84,7 @@ export function buildApp() {
   });
 
   fastify.register(webhookRoutes);
+  fastify.register(paymentRoutes);
   fastify.register(authRoutes, { prefix: '/auth' });
   fastify.register(adminRoutes, { prefix: '/admin' });
 

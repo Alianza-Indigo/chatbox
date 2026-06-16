@@ -31,6 +31,7 @@ src/
     consumer.ts      — startWorker (descifra PII, mutex por conversación)
   routes/
     webhook.ts       — POST /webhook/whatsapp/:phoneId (Meta Cloud API)
+    payments.ts      — POST /webhook/payments/:provider/:botId (activa membresía)
     admin/
       index.ts       — requireAuth + org isolation hook
       bots.ts        — CRUD bots
@@ -44,7 +45,8 @@ src/
       feedback.ts
       users.ts
   services/
-    conversation.service.ts  — flujo principal: crisis → quota → safety → LLM → send
+    conversation.service.ts  — flujo principal: crisis → quota → membership → safety → LLM → send
+    membership.service.ts    — modo microsaas: free tier + membresía por usuario final
     bot.service.ts           — loadChannelByPhoneId (con cache)
     knowledge.service.ts     — pgvector → cosine similarity → keyword fallback
     metrics.service.ts       — prom-client isolated registry
@@ -54,6 +56,7 @@ src/
   providers/
     llm.ts           — getLLMProvider (anthropic, openai, …)
     channel.ts       — getChannelProvider (meta_cloud)
+    payments/        — getPaymentProvider (mercadopago) — BYO token por bot
   middleware/
     auth.ts          — JWT + ADMIN_API_KEY superadmin bypass
 ```
@@ -97,6 +100,19 @@ src/
 - Registra `crisisEvent` en DB con `actionTaken`
 - Usa `crisisConfig` del bot (líneas por país) o fallback México (SAPTEL, Línea de la Vida)
 
+### Microsaas / Membresía (modo por bot)
+- Cada bot puede operar como **chatbot tradicional** (sin paywall) o **microsaas**. El modo vive en `Bot.identity.membership` (mismo patrón que `identity.collectFeedback`):
+  ```json
+  { "membership": { "enabled": true, "freeMessages": 10, "durationDays": 30, "price": 99, "currency": "MXN", "title": "Membresía mensual", "paywallMessage": "..." } }
+  ```
+  Ausente o `enabled:false` ⇒ modo tradicional (gate no-op).
+- **Free tier**: cada `EndUser` tiene `freeMsgUsed` (de por vida) y `membershipUntil`. El gate (`membership.service.ts`) corre **después** de la cuota de org y **antes** del LLM. Un mensaje con paywall nunca llega al LLM ni consume cuota de org.
+- El crédito gratis se consume **solo después** de entregar la respuesta (no en intentos fallidos). El mutex por conversación serializa al usuario, así que no se requiere increment atómico.
+- **Pago (Mercado Pago, BYO)**: el token MP de cada cliente se guarda como `BotIntegration` `kind:'payments'` `provider:'mercadopago'` (cifrado, igual que STT). La plataforma **no** tiene credenciales de pago globales.
+- Al toparse con el paywall se crea/reutiliza una preferencia MP (`init_point`) con `external_reference = Payment.id` y `notification_url = {PUBLIC_BASE_URL}/webhook/payments/mercadopago/{botId}`. Se reusa un link pendiente < 6h para no crear preferencias en cada mensaje.
+- **Webhook de pago** (`routes/payments.ts`): nunca confía en el body — vuelve a consultar el pago vía API de MP con el token del bot (autoritativo), y si está `approved` activa/extiende `membershipUntil`. Idempotente (un `Payment` ya `approved` es no-op).
+- **Privacidad**: no se notifica al usuario por WhatsApp tras pagar (el teléfono solo se guarda como hash). La membresía aplica en su siguiente mensaje.
+
 ### Métricas
 - `prom-client` con registry aislado (no global)
 - `/metrics` protegido con `x-admin-key` header
@@ -116,6 +132,7 @@ META_VERIFY_TOKEN=<webhook verify token>
 # Opcionales
 SENTRY_DSN=<platform Sentry>
 WEBHOOK_ALERT_URL=<Slack/Discord webhook>
+PUBLIC_BASE_URL=<https://api.tu-dominio.com>  # requerido para activación automática de membresías
 ```
 
 ## Railway deployment
@@ -127,18 +144,22 @@ WEBHOOK_ALERT_URL=<Slack/Discord webhook>
 ## Tests
 
 ```bash
-npm test        # 110 tests, 8 suites
+npm test        # 144 tests, 12 suites
 ```
 
 Suites:
 - `resilience.test.ts` — lock isolation, idempotency, dedup, PII encryption
 - `conversation.crisis.test.ts` — crisis flow, LLM bypass, fallback lines
+- `conversation.membership.test.ts` — gate microsaas (free tier, paywall, miembro activo)
+- `membership.test.ts` — config, elegibilidad, activación, checkout, reconciliación
+- `payments.provider.test.ts` — Mercado Pago provider (preference, status normalize)
 - `knowledge.test.ts` — pgvector → cosine → keyword fallback chain
 - `safety.test.ts` — SafetyClassifier (independiente del LLM cliente)
 - `auth.test.ts` — JWT + superadmin bypass
 - `isolation.test.ts` — org isolation middleware
 - `quota.test.ts` — rate limiting por org
 - `stt.test.ts` — Speech-to-text provider
+- `llm.test.ts` — LLM providers
 
 ## Pendientes (no bloqueantes para Railway)
 

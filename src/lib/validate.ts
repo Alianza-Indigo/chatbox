@@ -41,12 +41,36 @@ const BrandingSchema = z.object({
   termsUrl: z.string().url().optional(),
 });
 
+// Microsaas-mode config carried inside Bot.identity.membership. Optional fields
+// fall back to service defaults; only validated for shape when present.
+export const MembershipConfigSchema = z.object({
+  enabled: z.boolean(),
+  freeMessages: z.number().int().min(0).optional(),
+  durationDays: z.number().int().min(1).optional(),
+  price: z.number().min(0).optional(),
+  currency: z.string().min(3).max(3).optional(),
+  title: z.string().min(1).max(120).optional(),
+  paywallMessage: z.string().max(1000).optional(),
+});
+
+// identity is a free-form config bag, but validate identity.membership when set.
+const IdentitySchema = z.record(z.unknown()).superRefine((val, ctx) => {
+  if (val.membership !== undefined) {
+    const res = MembershipConfigSchema.safeParse(val.membership);
+    if (!res.success) {
+      for (const issue of res.error.issues) {
+        ctx.addIssue({ ...issue, path: ['membership', ...issue.path] });
+      }
+    }
+  }
+});
+
 export const CreateBotSchema = z.object({
   orgId: z.string().uuid().optional(),
   name: z.string().min(1),
   locale: z.string().optional(),
   systemPrompt: z.string().optional(),
-  identity: z.record(z.unknown()).optional(),
+  identity: IdentitySchema.optional(),
   onboardingMsg: z.string().optional(),
   historyWindow: z.number().int().min(1).max(50).optional(),
   llmProvider: z.enum(REGISTERED_PROVIDERS).optional(),
@@ -61,7 +85,7 @@ export const UpdateBotSchema = z.object({
   name: z.string().min(1).optional(),
   locale: z.string().optional(),
   status: z.enum(['draft', 'active', 'paused', 'credential_error']).optional(),
-  identity: z.record(z.unknown()).optional(),
+  identity: IdentitySchema.optional(),
   onboardingMsg: z.string().optional(),
   historyWindow: z.number().int().min(1).max(50).optional(),
   llmProvider: z.enum(REGISTERED_PROVIDERS).optional(),

@@ -11,7 +11,8 @@ import { captureTenantException } from './tenant-sentry.service';
 import * as consentService from './consent.service';
 import { getRelevantKnowledge } from './knowledge.service';
 import { tryIncrementQuota } from './quota.service';
-import { recordQuotaBlock, recordSafetyBlock, recordMessageProcessed, recordPromptInjectionBlock, recordOrgLlmError } from './metrics.service';
+import { getMembershipConfig, evaluateMembership, consumeFreeCredit, createCheckoutLink, buildPaywallMessage } from './membership.service';
+import { recordQuotaBlock, recordSafetyBlock, recordMessageProcessed, recordPromptInjectionBlock, recordOrgLlmError, recordMembershipBlock } from './metrics.service';
 import { downloadMedia } from './media.service';
 import { getLLMProvider, LLMCredentialError, LLMRateLimitError } from '../providers/llm';
 import { getChannelProvider } from '../providers/channel';
@@ -158,6 +159,23 @@ export async function processInboundMessage(job: InboundMessageJob): Promise<voi
     return;
   }
 
+  // ── Membership gate (microsaas mode) — per-end-user free tier + paid membership.
+  //    No-op for bots in traditional mode (identity.membership disabled). Paywalled
+  //    messages never reach the LLM. The free credit is consumed only after a reply
+  //    is delivered (see end of function) so failed attempts are not charged.
+  let consumeFreeOnSuccess = false;
+  const membershipCfg = getMembershipConfig(bot);
+  if (membershipCfg) {
+    const decision = evaluateMembership(endUser, membershipCfg);
+    if (!decision.allowed) {
+      recordMembershipBlock(bot.orgId);
+      const checkoutUrl = await createCheckoutLink(bot, endUser.id, membershipCfg);
+      await channelProvider.sendText({ phoneId: channel.phoneId, accessToken: channelCreds.accessToken, to: job.from, text: buildPaywallMessage(membershipCfg, checkoutUrl), apiVersion: config.META_API_VERSION });
+      return;
+    }
+    consumeFreeOnSuccess = decision.viaFree;
+  }
+
   // ── Step 7: History + knowledge ──────────────────────────────────────────
   const history = await getHistory(bot.id, endUser.id, bot.historyWindow);
   const embedderKey = resolveEmbedderKey(bot.integrations, bot.llmProvider ?? '', bot.llmApiKeyEnc);
@@ -231,6 +249,13 @@ export async function processInboundMessage(job: InboundMessageJob): Promise<voi
   // ── Step 10: Send ────────────────────────────────────────────────────────
   await channelProvider.sendText({ phoneId: channel.phoneId, accessToken: channelCreds.accessToken, to: job.from, text: responseText, apiVersion: config.META_API_VERSION });
   recordMessageProcessed(bot.orgId);
+
+  // Charge one lifetime free interaction only after the reply was delivered.
+  // On a send-failure retry the membership gate re-evaluates the (unchanged) counter,
+  // so the message is never paywalled mid-conversation and the credit is spent once.
+  if (consumeFreeOnSuccess) {
+    await consumeFreeCredit(endUser.id).catch(() => { /* non-critical: reply already sent */ });
+  }
 
   // ── Optional feedback collection ─────────────────────────────────────────
   const identity = bot.identity as Record<string, unknown> | null;
