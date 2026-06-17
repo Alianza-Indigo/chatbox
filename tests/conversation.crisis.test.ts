@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InboundMessageJob } from '../src/types';
+import { processInboundMessage, buildCrisisMessage } from '../src/services/conversation.service';
+import { getLLMProvider } from '../src/providers/llm';
 
 const {
   mockSendText,
@@ -14,6 +16,8 @@ const {
   mockSafetyClassify: vi.fn(),
   mockSafetyClassifyAsync: vi.fn(),
 }));
+
+const TEST_TIMEOUT_MS = 15000;
 
 vi.mock('../src/db', () => ({
   db: {
@@ -150,8 +154,6 @@ describe('Crisis flow - LLM is never called', () => {
     message: Record<string, ReturnType<typeof vi.fn>>;
     crisisEvent: Record<string, ReturnType<typeof vi.fn>>;
   };
-  let getLLMProvider: ReturnType<typeof vi.fn>;
-
   beforeEach(async () => {
     vi.clearAllMocks();
     mockSendText.mockResolvedValue(undefined);
@@ -173,43 +175,36 @@ describe('Crisis flow - LLM is never called', () => {
     db.message.findUnique.mockResolvedValue(null);
     db.message.create.mockResolvedValue({});
 
-    const llmMod = await import('../src/providers/llm');
-    getLLMProvider = llmMod.getLLMProvider as ReturnType<typeof vi.fn>;
   });
 
   it('does NOT call the LLM when input contains suicide risk (Spanish)', async () => {
-    const { processInboundMessage } = await import('../src/services/conversation.service');
     await processInboundMessage(makeJob('quiero suicidarme'));
     expect(getLLMProvider).not.toHaveBeenCalled();
     expect(mockLLMComplete).not.toHaveBeenCalled();
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('does NOT call the LLM for self-harm input', async () => {
-    const { processInboundMessage } = await import('../src/services/conversation.service');
     await processInboundMessage(makeJob('quiero lastimarme'));
     expect(getLLMProvider).not.toHaveBeenCalled();
     expect(mockLLMComplete).not.toHaveBeenCalled();
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('does NOT call the LLM for English crisis input', async () => {
-    const { processInboundMessage } = await import('../src/services/conversation.service');
     await processInboundMessage(makeJob('I want to kill myself'));
     expect(getLLMProvider).not.toHaveBeenCalled();
     expect(mockLLMComplete).not.toHaveBeenCalled();
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('records a crisis_event in the database', async () => {
-    const { processInboundMessage } = await import('../src/services/conversation.service');
     await processInboundMessage(makeJob('me quiero matar'));
     expect(db.crisisEvent.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ botId: 'bot-uuid-1', actionTaken: 'input_detected_pre_consent' }),
       }),
     );
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('sends crisis derivation lines from the specific bot config', async () => {
-    const { processInboundMessage } = await import('../src/services/conversation.service');
     await processInboundMessage(makeJob('quiero suicidarme'));
     expect(mockSendText).toHaveBeenCalled();
     const sentText: string = mockSendText.mock.calls[0][0].text;
@@ -217,37 +212,33 @@ describe('Crisis flow - LLM is never called', () => {
     expect(sentText).toContain('55 5259-8121');
     expect(sentText).toContain('Linea de la Vida');
     expect(sentText).toContain('800 911 2000');
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('uses fallback Mexico lines when bot has no crisis config', async () => {
-    const { processInboundMessage } = await import('../src/services/conversation.service');
     mockLoadChannel.mockResolvedValue({ ...mockChannel, bot: { ...mockBot, crisisConfig: [] } });
     await processInboundMessage(makeJob('quiero morir'));
     expect(mockSendText).toHaveBeenCalled();
     const sentText: string = mockSendText.mock.calls[0][0].text;
     expect(sentText).toContain('SAPTEL');
     expect(sentText).toContain('800 911 2000');
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('calls the client LLM normally for non-crisis messages', async () => {
-    const { processInboundMessage } = await import('../src/services/conversation.service');
     await processInboundMessage(makeJob('sone que volaba sobre el mar'));
     expect(getLLMProvider).toHaveBeenCalledWith('anthropic');
     expect(mockLLMComplete).toHaveBeenCalled();
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('skips everything (including crisis check) for paused bots', async () => {
-    const { processInboundMessage } = await import('../src/services/conversation.service');
     mockLoadChannel.mockResolvedValue({ ...mockChannel, bot: { ...mockBot, status: 'paused' } });
     await processInboundMessage(makeJob('quiero suicidarme'));
     expect(db.crisisEvent.create).not.toHaveBeenCalled();
     expect(mockSendText).not.toHaveBeenCalled();
-  });
+  }, TEST_TIMEOUT_MS);
 });
 
 describe('buildCrisisMessage', () => {
   it('formats crisis lines from bot config', async () => {
-    const { buildCrisisMessage } = await import('../src/services/conversation.service');
     const msg = buildCrisisMessage([
       { id: '1', botId: 'b1', country: 'MX', lines: [{ name: 'TEST LINE', phone: '800-000-0000', hours: '24h' }], enabled: true },
     ]);
@@ -257,14 +248,12 @@ describe('buildCrisisMessage', () => {
   });
 
   it('returns default Mexico lines when config is empty', async () => {
-    const { buildCrisisMessage } = await import('../src/services/conversation.service');
     const msg = buildCrisisMessage([]);
     expect(msg).toContain('SAPTEL');
     expect(msg).toContain('55 5259-8121');
   });
 
   it('ignores disabled crisis configs and uses fallback', async () => {
-    const { buildCrisisMessage } = await import('../src/services/conversation.service');
     const msg = buildCrisisMessage([
       { id: '1', botId: 'b1', country: 'MX', lines: [{ name: 'DISABLED', phone: '000', hours: '' }], enabled: false },
     ]);

@@ -1,20 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  getByKeyword,
-  getRelevantKnowledge,
-  encodeEmbedding,
-  decodeEmbedding,
-  generateEmbedding,
-} from '../src/services/knowledge.service';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotKnowledge } from '@prisma/client';
 
-// ── Stable mock objects ───────────────────────────────────────────────────────
-
-const { mockEmbeddingsCreate } = vi.hoisted(() => ({
+const { mockEmbeddingsCreate, mockQueryRaw } = vi.hoisted(() => ({
   mockEmbeddingsCreate: vi.fn().mockResolvedValue({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+  mockQueryRaw: vi.fn().mockRejectedValue(new Error('pgvector unavailable in tests')),
 }));
-
-// ── Module mock ───────────────────────────────────────────────────────────────
 
 vi.mock('openai', () => ({
   default: vi.fn().mockImplementation(() => ({
@@ -22,7 +12,24 @@ vi.mock('openai', () => ({
   })),
 }));
 
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
+vi.mock('../src/db', () => ({
+  db: {
+    $queryRaw: mockQueryRaw,
+    $executeRaw: vi.fn(),
+  },
+}));
+
+vi.mock('../src/logger', () => ({
+  logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
+
+import {
+  getByKeyword,
+  getRelevantKnowledge,
+  encodeEmbedding,
+  decodeEmbedding,
+  generateEmbedding,
+} from '../src/services/knowledge.service';
 
 function makeEntry(id: string, title: string, content: string, tags: string[] = [], embeddingVec?: number[]): BotKnowledge {
   return {
@@ -33,26 +40,24 @@ function makeEntry(id: string, title: string, content: string, tags: string[] = 
     tags,
     embeddingData: embeddingVec ? encodeEmbedding(embeddingVec) : null,
     hasEmbedding: !!embeddingVec,
-  };
+  } as BotKnowledge;
 }
 
 const KB: BotKnowledge[] = [
-  makeEntry('e1', 'Serpientes en sueños', 'Las serpientes suelen representar transformación o peligro latente.', ['serpiente', 'transformación']),
-  makeEntry('e2', 'Volar en sueños', 'Soñar que vuelas puede indicar deseo de libertad o escapar de problemas.', ['volar', 'libertad']),
-  makeEntry('e3', 'Agua en sueños', 'El agua simboliza las emociones y el subconsciente.', ['agua', 'emoción']),
+  makeEntry('e1', 'Serpientes en suenos', 'Las serpientes suelen representar transformacion o peligro latente.', ['serpiente', 'transformacion']),
+  makeEntry('e2', 'Volar en suenos', 'Sonar que vuelas puede indicar deseo de libertad o escapar de problemas.', ['volar', 'libertad']),
+  makeEntry('e3', 'Agua en suenos', 'El agua simboliza las emociones y el subconsciente.', ['agua', 'emocion']),
 ];
-
-// ─── Keyword retrieval ────────────────────────────────────────────────────────
 
 describe('getByKeyword', () => {
   it('returns entries matching a query word', () => {
-    const results = getByKeyword(KB, 'soñé con serpientes');
-    expect(results.map(r => r.id)).toContain('e1');
+    const results = getByKeyword(KB, 'sone con serpientes');
+    expect(results.map((r) => r.id)).toContain('e1');
   });
 
   it('returns entries matching via tags', () => {
     const results = getByKeyword(KB, 'libertad');
-    expect(results.map(r => r.id)).toContain('e2');
+    expect(results.map((r) => r.id)).toContain('e2');
   });
 
   it('returns empty array when no match', () => {
@@ -60,20 +65,18 @@ describe('getByKeyword', () => {
     expect(results).toHaveLength(0);
   });
 
-  it('ignores short words (≤3 chars)', () => {
+  it('ignores short words (<=3 chars)', () => {
     const results = getByKeyword(KB, 'en el');
     expect(results).toHaveLength(0);
   });
 
   it('matches multiple entries for broad queries', () => {
-    const results = getByKeyword(KB, 'sueños emoción transformación');
-    const ids = results.map(r => r.id);
+    const results = getByKeyword(KB, 'suenos emocion transformacion');
+    const ids = results.map((r) => r.id);
     expect(ids).toContain('e1');
     expect(ids).toContain('e3');
   });
 });
-
-// ─── Embedding codec ──────────────────────────────────────────────────────────
 
 describe('encodeEmbedding / decodeEmbedding', () => {
   it('round-trips a float32 vector', () => {
@@ -94,17 +97,21 @@ describe('encodeEmbedding / decodeEmbedding', () => {
   });
 });
 
-// ─── getRelevantKnowledge (integrated) ───────────────────────────────────────
-
 describe('getRelevantKnowledge', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockQueryRaw.mockRejectedValue(new Error('pgvector unavailable in tests'));
+    mockEmbeddingsCreate.mockResolvedValue({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
+  });
+
   it('returns keyword results when no embedder key is provided', async () => {
-    const result = await getRelevantKnowledge('bot-1', KB, 'soñé con agua', undefined);
-    expect(result).toContain('Agua en sueños');
-    expect(result).not.toContain('Volar en sueños');
+    const result = await getRelevantKnowledge('bot-1', KB, 'sone con agua', undefined);
+    expect(result).toContain('Agua en suenos');
+    expect(result).not.toContain('Volar en suenos');
   });
 
   it('returns empty string when nothing matches', async () => {
-    const result = await getRelevantKnowledge('bot-1', KB, 'dinosaurio jurásico', undefined);
+    const result = await getRelevantKnowledge('bot-1', KB, 'dinosaurio jurasico', undefined);
     expect(result).toBe('');
   });
 
@@ -117,37 +124,34 @@ describe('getRelevantKnowledge', () => {
     const vec1 = [1, 0, 0, 0];
     const vec2 = [0, 1, 0, 0];
     const vec3 = [0, 0, 1, 0];
-    const queryVec = [1, 0.1, 0, 0]; // close to vec1
+    const queryVec = [1, 0.1, 0, 0];
 
     const kbWithEmbeddings: BotKnowledge[] = [
-      makeEntry('s1', 'Serpientes', 'Transformación', [], vec1),
+      makeEntry('s1', 'Serpientes', 'Transformacion', [], vec1),
       makeEntry('s2', 'Volar', 'Libertad', [], vec2),
       makeEntry('s3', 'Agua', 'Emociones', [], vec3),
     ];
 
     mockEmbeddingsCreate.mockResolvedValueOnce({ data: [{ embedding: queryVec }] });
 
-    // pgvector DB search will fail (db not mocked) → falls through to in-process cosine
     const result = await getRelevantKnowledge('bot-1', kbWithEmbeddings, 'serpiente', 'fake-key');
+    expect(mockQueryRaw).toHaveBeenCalled();
     expect(result).toContain('Serpientes');
     expect(result).not.toContain('Volar');
   });
 
   it('falls back to keyword search when semantic fails (API error)', async () => {
     const kbWithEmbeddings: BotKnowledge[] = [
-      makeEntry('s1', 'Serpientes', 'Transformación y peligro', [], [1, 0, 0]),
+      makeEntry('s1', 'Serpientes', 'Transformacion y peligro', [], [1, 0, 0]),
     ];
 
-    // Both DB and in-process embedding calls will reject → keyword fallback
     mockEmbeddingsCreate.mockRejectedValueOnce(new Error('OpenAI API error'));
     mockEmbeddingsCreate.mockRejectedValueOnce(new Error('OpenAI API error'));
 
-    const result = await getRelevantKnowledge('bot-1', kbWithEmbeddings, 'serpiente transformación', 'fake-key');
-    expect(result).toContain('Serpientes'); // keyword fallback worked
+    const result = await getRelevantKnowledge('bot-1', kbWithEmbeddings, 'serpiente transformacion', 'fake-key');
+    expect(result).toContain('Serpientes');
   });
 });
-
-// ─── generateEmbedding ────────────────────────────────────────────────────────
 
 describe('generateEmbedding', () => {
   beforeEach(() => {
