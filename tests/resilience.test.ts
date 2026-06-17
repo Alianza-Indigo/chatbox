@@ -1,16 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InboundMessageJob } from '../src/types';
 
-// ── Hoisted mocks ─────────────────────────────────────────────────────────────
-
-const { mockSendText, mockLLMComplete, mockLoadChannel, mockMessageAdd } = vi.hoisted(() => ({
+const {
+  mockSendText,
+  mockLLMComplete,
+  mockLoadChannel,
+  mockMessageAdd,
+  mockSafetyClassify,
+  mockSafetyClassifyAsync,
+} = vi.hoisted(() => ({
   mockSendText: vi.fn().mockResolvedValue(undefined),
   mockLLMComplete: vi.fn().mockResolvedValue({ text: 'LLM response', usage: {} }),
   mockLoadChannel: vi.fn(),
   mockMessageAdd: vi.fn().mockResolvedValue(undefined),
+  mockSafetyClassify: vi.fn().mockReturnValue({ isCrisis: false }),
+  mockSafetyClassifyAsync: vi.fn().mockResolvedValue({ isCrisis: false }),
 }));
-
-// ── Module mocks ──────────────────────────────────────────────────────────────
 
 vi.mock('../src/db', () => ({
   db: {
@@ -66,15 +71,31 @@ vi.mock('../src/queue/queue', () => ({
 }));
 
 vi.mock('../src/services/metrics.service', () => ({
-  recordLLMUsage: vi.fn(), recordLLMError: vi.fn(), recordMetaError: vi.fn(),
-  recordQuotaBlock: vi.fn(), recordSafetyBlock: vi.fn(), recordMessageProcessed: vi.fn(),
-  recordPromptInjectionBlock: vi.fn(), recordStaleWebhook: vi.fn(), recordOrgLlmError: vi.fn(),
+  recordLLMUsage: vi.fn(),
+  recordLLMError: vi.fn(),
+  recordMetaError: vi.fn(),
+  recordQuotaBlock: vi.fn(),
+  recordSafetyBlock: vi.fn(),
+  recordMessageProcessed: vi.fn(),
+  recordPromptInjectionBlock: vi.fn(),
+  recordStaleWebhook: vi.fn(),
+  recordOrgLlmError: vi.fn(),
   updateDLQDepth: vi.fn(),
 }));
 
+vi.mock('../src/services/safety.service', () => ({
+  safetyClassifier: {
+    classify: mockSafetyClassify,
+    classifyAsync: mockSafetyClassifyAsync,
+  },
+  SafetyServiceUnavailableError: class SafetyServiceUnavailableError extends Error {},
+}));
+
 vi.mock('../src/services/notification.service', () => ({
-  notifyCredentialError: vi.fn(), notifyLLMFailure: vi.fn(),
-  notifyDLQAlert: vi.fn(), sendWebhookAlert: vi.fn(),
+  notifyCredentialError: vi.fn(),
+  notifyLLMFailure: vi.fn(),
+  notifyDLQAlert: vi.fn(),
+  sendWebhookAlert: vi.fn(),
 }));
 
 vi.mock('../src/services/tenant-sentry.service', () => ({
@@ -84,8 +105,6 @@ vi.mock('../src/services/tenant-sentry.service', () => ({
 vi.mock('../src/lib/pubsub', () => ({
   getPubClient: vi.fn(() => ({ ping: vi.fn().mockResolvedValue('PONG') })),
 }));
-
-// ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const BASE_CHANNEL = {
   id: 'ch-1',
@@ -130,16 +149,14 @@ function makeJob(from: string, textBody = 'hola mundo'): InboundMessageJob {
   };
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-describe('Resilience — lock, idempotency, deduplication', () => {
+describe('Resilience - lock, idempotency, deduplication', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLoadChannel.mockResolvedValue(BASE_CHANNEL);
     mockLLMComplete.mockResolvedValue({ text: 'Respuesta del bot', usage: {} });
+    mockSafetyClassify.mockReturnValue({ isCrisis: false });
+    mockSafetyClassifyAsync.mockResolvedValue({ isCrisis: false });
   });
-
-  // ── 1. Per-user lock isolation ────────────────────────────────────────────
 
   it('lock key includes sender phone so two users on the same business number use separate locks', () => {
     const userA = '+521112223333';
@@ -149,13 +166,10 @@ describe('Resilience — lock, idempotency, deduplication', () => {
     const lockA = `conv:${phoneId}:${userA}`;
     const lockB = `conv:${phoneId}:${userB}`;
 
-    // Different users → different lock keys → no cross-user serialization
     expect(lockA).not.toBe(lockB);
     expect(lockA).toBe(`conv:phone-biz-1:${userA}`);
     expect(lockB).toBe(`conv:phone-biz-1:${userB}`);
   });
-
-  // ── 2. Inbound message idempotency on retry after LLM failure ─────────────
 
   it('uses upsert for inbound messages so a retry after LLM failure does not duplicate the row', async () => {
     const { processInboundMessage } = await import('../src/services/conversation.service');
@@ -163,22 +177,18 @@ describe('Resilience — lock, idempotency, deduplication', () => {
 
     const job = makeJob('+521112223333');
 
-    // First attempt: inbound persisted, then LLM throws before outbound is persisted
-    // findUnique returns null (no outbound yet) so LLM is invoked and fails
     (db.message.upsert as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'msg-in-1' });
     (db.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
     mockLLMComplete.mockRejectedValueOnce(new Error('LLM timeout'));
 
     await expect(processInboundMessage(job)).rejects.toThrow('LLM timeout');
 
-    // Verify inbound used upsert (idempotent)
     expect(db.message.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { externalId: job.waMessageId },
       }),
     );
 
-    // Second attempt: findUnique still null (outbound never persisted), LLM succeeds
     (db.message.upsert as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'msg-in-1' });
     (db.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
     (db.message.create as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'msg-out-1' });
@@ -186,13 +196,9 @@ describe('Resilience — lock, idempotency, deduplication', () => {
 
     await processInboundMessage(job);
 
-    // upsert called twice (first attempt + retry) — both with same externalId
     expect(db.message.upsert).toHaveBeenCalledTimes(2);
-    // Output message created exactly once (only on the successful attempt)
     expect(db.message.create).toHaveBeenCalledTimes(1);
   });
-
-  // ── 3. Retry after WhatsApp send failure ─────────────────────────────────
 
   it('re-sends the already-persisted response on retry without calling LLM again', async () => {
     const { processInboundMessage } = await import('../src/services/conversation.service');
@@ -200,15 +206,13 @@ describe('Resilience — lock, idempotency, deduplication', () => {
 
     const job = makeJob('+521112223333', 'dime algo interesante');
 
-    // First attempt: LLM ok, outbound persisted, but sendText fails
     (db.message.upsert as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'msg-in-1' });
-    (db.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null); // no outbound yet
+    (db.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
     (db.message.create as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'msg-out-1' });
     mockSendText.mockRejectedValueOnce(new Error('WhatsApp 503'));
 
     await expect(processInboundMessage(job)).rejects.toThrow('WhatsApp 503');
 
-    // Second attempt: findUnique finds the already-persisted outbound → skip LLM → re-send
     (db.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       id: 'msg-out-1',
       bodyEnc: Buffer.from('enc'),
@@ -217,13 +221,11 @@ describe('Resilience — lock, idempotency, deduplication', () => {
 
     await processInboundMessage(job);
 
-    expect(db.message.upsert).toHaveBeenCalledTimes(2);       // inbound idempotent on both attempts
-    expect(db.message.create).toHaveBeenCalledTimes(1);       // outbound persisted only once
-    expect(mockLLMComplete).toHaveBeenCalledTimes(1);         // LLM not called on retry
-    expect(mockSendText).toHaveBeenCalledTimes(2);            // failed + succeeded
+    expect(db.message.upsert).toHaveBeenCalledTimes(2);
+    expect(db.message.create).toHaveBeenCalledTimes(1);
+    expect(mockLLMComplete).toHaveBeenCalledTimes(1);
+    expect(mockSendText).toHaveBeenCalledTimes(2);
   });
-
-  // ── 4. Duplicate webhook deduplication ───────────────────────────────────
 
   it('producer sets jobId = wa-{waMessageId} so BullMQ deduplicates duplicate webhook deliveries', async () => {
     const { enqueueInboundMessage } = await import('../src/queue/producer');
@@ -231,19 +233,16 @@ describe('Resilience — lock, idempotency, deduplication', () => {
     const job = makeJob('+521112223333', 'mensaje duplicado');
 
     await enqueueInboundMessage(job);
-    await enqueueInboundMessage(job); // simulates Meta delivering the same webhook twice
+    await enqueueInboundMessage(job);
 
     expect(mockMessageAdd).toHaveBeenCalledTimes(2);
 
     const [, , firstOpts] = mockMessageAdd.mock.calls[0];
     const [, , secondOpts] = mockMessageAdd.mock.calls[1];
 
-    // Both calls use the same jobId — BullMQ's deduplication key
     expect(firstOpts.jobId).toBe(`wa-${job.waMessageId}`);
     expect(secondOpts.jobId).toBe(`wa-${job.waMessageId}`);
   });
-
-  // ── 5. PII fields are encrypted in the BullMQ payload ─────────────────────
 
   it('producer encrypts from and textBody before storing in Redis', async () => {
     const { enqueueInboundMessage } = await import('../src/queue/producer');
@@ -254,14 +253,10 @@ describe('Resilience — lock, idempotency, deduplication', () => {
 
     const [, payload] = mockMessageAdd.mock.calls[0];
 
-    // encryptToBase64 was called for both PII fields
     expect(encryptToBase64).toHaveBeenCalledWith(job.from);
     expect(encryptToBase64).toHaveBeenCalledWith(job.textBody);
-
-    // The stored payload contains the encrypted (base64) values, not plaintext
     expect(payload.from).not.toBe(job.from);
     expect(payload.textBody).not.toBe(job.textBody);
-    // Non-PII fields are stored as-is
     expect(payload.phoneId).toBe(job.phoneId);
     expect(payload.waMessageId).toBe(job.waMessageId);
   });

@@ -1,18 +1,29 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InboundMessageJob } from '../src/types';
 
-// ── Hoisted mocks ─────────────────────────────────────────────────────────────
-
-const { mockSendText, mockLLMComplete, mockLoadChannel, mockCreateCheckout } = vi.hoisted(() => ({
+const {
+  mockSendText,
+  mockLLMComplete,
+  mockLoadChannel,
+  mockCreateCheckout,
+  mockSafetyClassify,
+  mockSafetyClassifyAsync,
+} = vi.hoisted(() => ({
   mockSendText: vi.fn().mockResolvedValue(undefined),
   mockLLMComplete: vi.fn().mockResolvedValue({ text: 'Respuesta del bot', usage: {} }),
   mockLoadChannel: vi.fn(),
   mockCreateCheckout: vi.fn().mockResolvedValue({ providerRef: 'pref-1', url: 'https://mp/pay' }),
+  mockSafetyClassify: vi.fn().mockReturnValue({ isCrisis: false }),
+  mockSafetyClassifyAsync: vi.fn().mockResolvedValue({ isCrisis: false }),
 }));
 
 vi.mock('../src/db', () => ({
   db: {
-    endUser: { upsert: vi.fn(), update: vi.fn().mockResolvedValue({}), findUnique: vi.fn().mockResolvedValue({ membershipUntil: null }) },
+    endUser: {
+      upsert: vi.fn(),
+      update: vi.fn().mockResolvedValue({}),
+      findUnique: vi.fn().mockResolvedValue({ membershipUntil: null }),
+    },
     consent: { findFirst: vi.fn().mockResolvedValue({ id: 'c-1' }) },
     message: {
       upsert: vi.fn().mockResolvedValue({ id: 'msg-in-1' }),
@@ -23,15 +34,27 @@ vi.mock('../src/db', () => ({
     crisisEvent: { create: vi.fn() },
     bot: { update: vi.fn() },
     feedback: { create: vi.fn() },
-    organization: { findUnique: vi.fn().mockResolvedValue(null) }, // quota fail-open
-    payment: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'pay-1' }), update: vi.fn().mockResolvedValue({}) },
+    organization: { findUnique: vi.fn().mockResolvedValue(null) },
+    payment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 'pay-1' }),
+      update: vi.fn().mockResolvedValue({}),
+    },
   },
 }));
 
-vi.mock('../src/services/bot.service', () => ({ loadChannelByPhoneId: mockLoadChannel, invalidateBotCache: vi.fn() }));
+vi.mock('../src/services/bot.service', () => ({
+  loadChannelByPhoneId: mockLoadChannel,
+  invalidateBotCache: vi.fn(),
+}));
 
 vi.mock('../src/providers/channel', () => ({
-  getChannelProvider: vi.fn(() => ({ sendText: mockSendText, sendInteractive: vi.fn().mockResolvedValue(undefined), parseInbound: vi.fn(), sendTemplate: vi.fn() })),
+  getChannelProvider: vi.fn(() => ({
+    sendText: mockSendText,
+    sendInteractive: vi.fn().mockResolvedValue(undefined),
+    parseInbound: vi.fn(),
+    sendTemplate: vi.fn(),
+  })),
 }));
 
 vi.mock('../src/providers/llm', async (importOriginal) => {
@@ -39,7 +62,12 @@ vi.mock('../src/providers/llm', async (importOriginal) => {
   return { ...original, getLLMProvider: vi.fn(() => ({ complete: mockLLMComplete })) };
 });
 
-vi.mock('../src/providers/payments', () => ({ getPaymentProvider: vi.fn(() => ({ createCheckout: mockCreateCheckout, getPayment: vi.fn() })) }));
+vi.mock('../src/providers/payments', () => ({
+  getPaymentProvider: vi.fn(() => ({
+    createCheckout: mockCreateCheckout,
+    getPayment: vi.fn(),
+  })),
+}));
 
 vi.mock('../src/crypto', () => ({
   encrypt: vi.fn().mockReturnValue(Buffer.from('enc')),
@@ -48,35 +76,99 @@ vi.mock('../src/crypto', () => ({
 }));
 
 vi.mock('../src/services/metrics.service', () => ({
-  recordLLMUsage: vi.fn(), recordLLMError: vi.fn(), recordMetaError: vi.fn(),
-  recordQuotaBlock: vi.fn(), recordSafetyBlock: vi.fn(), recordMessageProcessed: vi.fn(),
-  recordPromptInjectionBlock: vi.fn(), recordStaleWebhook: vi.fn(), recordOrgLlmError: vi.fn(),
-  recordMembershipBlock: vi.fn(), recordMembershipActivation: vi.fn(), updateDLQDepth: vi.fn(),
+  recordLLMUsage: vi.fn(),
+  recordLLMError: vi.fn(),
+  recordMetaError: vi.fn(),
+  recordQuotaBlock: vi.fn(),
+  recordSafetyBlock: vi.fn(),
+  recordMessageProcessed: vi.fn(),
+  recordPromptInjectionBlock: vi.fn(),
+  recordStaleWebhook: vi.fn(),
+  recordOrgLlmError: vi.fn(),
+  recordMembershipBlock: vi.fn(),
+  recordMembershipActivation: vi.fn(),
+  updateDLQDepth: vi.fn(),
 }));
 
-vi.mock('../src/services/notification.service', () => ({ notifyCredentialError: vi.fn(), notifyLLMFailure: vi.fn() }));
-vi.mock('../src/services/tenant-sentry.service', () => ({ captureTenantException: vi.fn() }));
+vi.mock('../src/services/safety.service', () => ({
+  safetyClassifier: {
+    classify: mockSafetyClassify,
+    classifyAsync: mockSafetyClassifyAsync,
+  },
+  SafetyServiceUnavailableError: class SafetyServiceUnavailableError extends Error {},
+}));
 
-// ── Fixtures ──────────────────────────────────────────────────────────────────
+vi.mock('../src/services/notification.service', () => ({
+  notifyCredentialError: vi.fn(),
+  notifyLLMFailure: vi.fn(),
+}));
 
-const MEMBERSHIP = { enabled: true, freeMessages: 2, durationDays: 30, price: 99, currency: 'MXN', title: 'Membresía' };
+vi.mock('../src/services/tenant-sentry.service', () => ({
+  captureTenantException: vi.fn(),
+}));
+
+const MEMBERSHIP = {
+  enabled: true,
+  freeMessages: 2,
+  durationDays: 30,
+  price: 99,
+  currency: 'MXN',
+  title: 'Membresia',
+};
 
 const CHANNEL = {
-  id: 'ch-1', phoneId: 'phone-biz-1', provider: 'meta_cloud', status: 'connected', credentials: Buffer.from('enc'),
+  id: 'ch-1',
+  phoneId: 'phone-biz-1',
+  provider: 'meta_cloud',
+  status: 'connected',
+  credentials: Buffer.from('enc'),
   bot: {
-    id: 'bot-1', name: 'TestBot', orgId: 'org-1', status: 'active', locale: 'es-MX', systemPrompt: 'Sys',
-    historyWindow: 5, llmProvider: 'openai', llmModel: 'gpt-4o-mini', llmApiKeyEnc: Buffer.from('enc'), llmParams: null,
-    identity: { membership: MEMBERSHIP }, onboardingMsg: null, updatedAt: new Date(), createdAt: new Date(),
-    safetyLevel: 'minimal', branding: { website: 'https://shop.test' }, commands: [], crisisConfig: [], knowledge: [],
-    integrations: [{ id: 'int-1', botId: 'bot-1', kind: 'payments', provider: 'mercadopago', status: 'active', credentials: Buffer.from('enc') }],
+    id: 'bot-1',
+    name: 'TestBot',
+    orgId: 'org-1',
+    status: 'active',
+    locale: 'es-MX',
+    systemPrompt: 'Sys',
+    historyWindow: 5,
+    llmProvider: 'openai',
+    llmModel: 'gpt-4o-mini',
+    llmApiKeyEnc: Buffer.from('enc'),
+    llmParams: null,
+    identity: { membership: MEMBERSHIP },
+    onboardingMsg: null,
+    updatedAt: new Date(),
+    createdAt: new Date(),
+    safetyLevel: 'minimal',
+    branding: { website: 'https://shop.test' },
+    commands: [],
+    crisisConfig: [],
+    knowledge: [],
+    integrations: [
+      {
+        id: 'int-1',
+        botId: 'bot-1',
+        kind: 'payments',
+        provider: 'mercadopago',
+        status: 'active',
+        credentials: Buffer.from('enc'),
+      },
+    ],
   },
 };
 
 function makeJob(): InboundMessageJob {
-  return { phoneId: 'phone-biz-1', waMessageId: `wamid-${Math.random()}`, from: '+521112223333', messageType: 'text', textBody: 'hola', timestamp: Date.now(), requestId: 'req-1' };
+  return {
+    phoneId: 'phone-biz-1',
+    waMessageId: `wamid-${Math.random()}`,
+    from: '+521112223333',
+    messageType: 'text',
+    textBody: 'hola',
+    timestamp: Date.now(),
+    requestId: 'req-1',
+  };
 }
 
-describe('Conversation — membership gate (microsaas mode)', () => {
+describe('Conversation - membership gate (microsaas mode)', () => {
   let db: { endUser: Record<string, ReturnType<typeof vi.fn>> };
 
   beforeEach(async () => {
@@ -84,6 +176,9 @@ describe('Conversation — membership gate (microsaas mode)', () => {
     mockSendText.mockResolvedValue(undefined);
     mockLLMComplete.mockResolvedValue({ text: 'Respuesta del bot', usage: {} });
     mockLoadChannel.mockResolvedValue(CHANNEL);
+    mockCreateCheckout.mockResolvedValue({ providerRef: 'pref-1', url: 'https://mp/pay' });
+    mockSafetyClassify.mockReturnValue({ isCrisis: false });
+    mockSafetyClassifyAsync.mockResolvedValue({ isCrisis: false });
     db = (await import('../src/db')).db as never;
     db.endUser.findUnique.mockResolvedValue({ membershipUntil: null });
   });
@@ -109,7 +204,7 @@ describe('Conversation — membership gate (microsaas mode)', () => {
     expect(mockCreateCheckout).toHaveBeenCalledTimes(1);
     const sent = mockSendText.mock.calls[0][0].text as string;
     expect(sent).toContain('https://mp/pay');
-    expect(db.endUser.update).not.toHaveBeenCalled(); // no free credit consumed
+    expect(db.endUser.update).not.toHaveBeenCalled();
   });
 
   it('serves an active member without consuming a free credit', async () => {

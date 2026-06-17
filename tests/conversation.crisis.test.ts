@@ -1,25 +1,34 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InboundMessageJob } from '../src/types';
 
-// ── Stable mock objects (vi.hoisted runs before vi.mock factories) ────────────
-
-const { mockSendText, mockLLMComplete, mockLoadChannel } = vi.hoisted(() => ({
+const {
+  mockSendText,
+  mockLLMComplete,
+  mockLoadChannel,
+  mockSafetyClassify,
+  mockSafetyClassifyAsync,
+} = vi.hoisted(() => ({
   mockSendText: vi.fn().mockResolvedValue(undefined),
-  mockLLMComplete: vi.fn().mockResolvedValue({ text: 'LLM response — should NOT appear in crisis tests', usage: {} }),
+  mockLLMComplete: vi.fn().mockResolvedValue({ text: 'LLM response - should NOT appear in crisis tests', usage: {} }),
   mockLoadChannel: vi.fn(),
+  mockSafetyClassify: vi.fn(),
+  mockSafetyClassifyAsync: vi.fn(),
 }));
-
-// ── Module mocks ──────────────────────────────────────────────────────────────
 
 vi.mock('../src/db', () => ({
   db: {
     endUser: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), upsert: vi.fn() },
     consent: { findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
-    message: { create: vi.fn(), upsert: vi.fn().mockResolvedValue({ id: 'msg-in-1' }), findMany: vi.fn(), findUnique: vi.fn().mockResolvedValue(null), deleteMany: vi.fn() },
+    message: {
+      create: vi.fn(),
+      upsert: vi.fn().mockResolvedValue({ id: 'msg-in-1' }),
+      findMany: vi.fn(),
+      findUnique: vi.fn().mockResolvedValue(null),
+      deleteMany: vi.fn(),
+    },
     crisisEvent: { create: vi.fn(), deleteMany: vi.fn() },
     bot: { update: vi.fn() },
     feedback: { deleteMany: vi.fn() },
-    // null → tryIncrementQuota returns true (fail-open for unknown org) — quota not exercised here
     organization: { findUnique: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn((ops: unknown[]) => Promise.all(ops)),
   },
@@ -54,20 +63,28 @@ vi.mock('../src/crypto', () => ({
   decryptJson: vi.fn().mockReturnValue({ accessToken: 'fake-channel-token' }),
 }));
 
-// ── Fixtures ──────────────────────────────────────────────────────────────────
+vi.mock('../src/services/safety.service', () => ({
+  safetyClassifier: {
+    classify: mockSafetyClassify,
+    classifyAsync: mockSafetyClassifyAsync,
+  },
+  SafetyServiceUnavailableError: class SafetyServiceUnavailableError extends Error {},
+}));
+
+const CRISIS_REGEX = /suicid|matar|morir|lastim|hacerme da[ñn]o|kill myself|self-harm|hurt myself/i;
 
 const CRISIS_LINES = [
   { name: 'SAPTEL', phone: '55 5259-8121', hours: '24h' },
-  { name: 'Línea de la Vida', phone: '800 911 2000', hours: '24h' },
+  { name: 'Linea de la Vida', phone: '800 911 2000', hours: '24h' },
 ];
 
 const mockBot = {
   id: 'bot-uuid-1',
-  name: 'Intérprete de sueños',
+  name: 'Interprete de suenos',
   orgId: 'org-1',
   status: 'active',
   locale: 'es-MX',
-  systemPrompt: 'Eres un intérprete de sueños.',
+  systemPrompt: 'Eres un interprete de suenos.',
   historyWindow: 5,
   llmProvider: 'anthropic',
   llmModel: 'claude-haiku-4-5-20251001',
@@ -97,25 +114,55 @@ const mockChannel = {
   bot: mockBot,
 };
 
-const mockEndUser = { id: 'user-1', botId: 'bot-uuid-1', waPhoneHash: 'hash', paused: false, consentDeclined: false, locale: 'es-MX', createdAt: new Date() };
-const mockConsent = { id: 'consent-1', endUserId: 'user-1', botId: 'bot-uuid-1', acceptedAt: new Date(), policyVersion: '1.0' };
+const mockEndUser = {
+  id: 'user-1',
+  botId: 'bot-uuid-1',
+  waPhoneHash: 'hash',
+  paused: false,
+  consentDeclined: false,
+  locale: 'es-MX',
+  createdAt: new Date(),
+};
+
+const mockConsent = {
+  id: 'consent-1',
+  endUserId: 'user-1',
+  botId: 'bot-uuid-1',
+  acceptedAt: new Date(),
+  policyVersion: '1.0',
+};
 
 function makeJob(text: string): InboundMessageJob {
-  return { phoneId: 'phone-id-123', waMessageId: 'wamid-1', from: '+5215551234567', messageType: 'text', textBody: text, timestamp: Date.now() };
+  return {
+    phoneId: 'phone-id-123',
+    waMessageId: 'wamid-1',
+    from: '+5215551234567',
+    messageType: 'text',
+    textBody: text,
+    timestamp: Date.now(),
+  };
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-describe('Crisis flow — LLM is never called', () => {
-  let db: { endUser: Record<string, ReturnType<typeof vi.fn>>; consent: Record<string, ReturnType<typeof vi.fn>>; message: Record<string, ReturnType<typeof vi.fn>>; crisisEvent: Record<string, ReturnType<typeof vi.fn>> };
+describe('Crisis flow - LLM is never called', () => {
+  let db: {
+    endUser: Record<string, ReturnType<typeof vi.fn>>;
+    consent: Record<string, ReturnType<typeof vi.fn>>;
+    message: Record<string, ReturnType<typeof vi.fn>>;
+    crisisEvent: Record<string, ReturnType<typeof vi.fn>>;
+  };
   let getLLMProvider: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    // Re-set default resolved values after clearAllMocks
     mockSendText.mockResolvedValue(undefined);
     mockLLMComplete.mockResolvedValue({ text: 'should not appear', usage: {} });
     mockLoadChannel.mockResolvedValue(mockChannel);
+    mockSafetyClassify.mockImplementation((text: string) =>
+      CRISIS_REGEX.test(text) ? { isCrisis: true, category: 'suicide_risk' } : { isCrisis: false },
+    );
+    mockSafetyClassifyAsync.mockImplementation(async (text: string) =>
+      CRISIS_REGEX.test(text) ? { isCrisis: true, category: 'suicide_risk' } : { isCrisis: false },
+    );
 
     const dbMod = await import('../src/db');
     db = dbMod.db as typeof db;
@@ -154,7 +201,6 @@ describe('Crisis flow — LLM is never called', () => {
   it('records a crisis_event in the database', async () => {
     const { processInboundMessage } = await import('../src/services/conversation.service');
     await processInboundMessage(makeJob('me quiero matar'));
-    // Pre-consent safety check fires before the consent gate, so actionTaken is 'input_detected_pre_consent'
     expect(db.crisisEvent.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ botId: 'bot-uuid-1', actionTaken: 'input_detected_pre_consent' }),
@@ -169,7 +215,7 @@ describe('Crisis flow — LLM is never called', () => {
     const sentText: string = mockSendText.mock.calls[0][0].text;
     expect(sentText).toContain('SAPTEL');
     expect(sentText).toContain('55 5259-8121');
-    expect(sentText).toContain('Línea de la Vida');
+    expect(sentText).toContain('Linea de la Vida');
     expect(sentText).toContain('800 911 2000');
   });
 
@@ -185,7 +231,7 @@ describe('Crisis flow — LLM is never called', () => {
 
   it('calls the client LLM normally for non-crisis messages', async () => {
     const { processInboundMessage } = await import('../src/services/conversation.service');
-    await processInboundMessage(makeJob('soñé que volaba sobre el mar'));
+    await processInboundMessage(makeJob('sone que volaba sobre el mar'));
     expect(getLLMProvider).toHaveBeenCalledWith('anthropic');
     expect(mockLLMComplete).toHaveBeenCalled();
   });
