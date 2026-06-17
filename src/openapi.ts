@@ -201,7 +201,23 @@ export const openApiSpec = {
           botId: { type: 'string', format: 'uuid' },
           locale: { type: 'string', nullable: true },
           paused: { type: 'boolean' },
+          freeMsgUsed: { type: 'integer' },
+          membershipUntil: { type: 'string', format: 'date-time', nullable: true },
           createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      Payment: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          botId: { type: 'string', format: 'uuid' },
+          endUserId: { type: 'string', format: 'uuid' },
+          provider: { type: 'string', example: 'mercadopago' },
+          status: { type: 'string', enum: ['pending', 'approved', 'rejected'] },
+          amount: { type: 'number', nullable: true },
+          currency: { type: 'string', nullable: true },
+          createdAt: { type: 'string', format: 'date-time' },
+          paidAt: { type: 'string', format: 'date-time', nullable: true },
         },
       },
       CrisisEvent: {
@@ -1088,6 +1104,25 @@ export const openApiSpec = {
           200: {
             description: 'End-user list',
             content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/EndUser' } } } },
+          },
+        },
+      },
+    },
+    '/admin/bots/{botId}/payments': {
+      get: {
+        tags: ['Users'],
+        summary: 'List membership payments for a bot',
+        description: 'Returns payment status and membership purchase metadata without exposing provider secrets or end-user PII.',
+        parameters: [
+          { name: 'botId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['pending', 'approved', 'rejected'] } },
+          { name: 'endUserId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+        ],
+        responses: {
+          200: {
+            description: 'Payment list',
+            content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/Payment' } } } },
           },
         },
       },

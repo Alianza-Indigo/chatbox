@@ -8,6 +8,7 @@ vi.mock('../src/db', () => ({
     botKnowledge: { findMany: vi.fn() },
     botIntegration: { findMany: vi.fn() },
     endUser: { findMany: vi.fn() },
+    payment: { findMany: vi.fn() },
     crisisEvent: { findMany: vi.fn() },
     organization: { findUnique: vi.fn(), findMany: vi.fn() },
     orgUser: { findFirst: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
@@ -129,6 +130,12 @@ describe('Multi-tenant route isolation', () => {
     it('GET users returns 403 for cross-org bot', async () => {
       vi.mocked(db.bot.findUnique).mockResolvedValueOnce({ orgId: ORG_B } as never);
       const res = await app.inject({ method: 'GET', url: `/admin/bots/${BOT_B}/users`, headers: { authorization: tokenA() } });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('GET payments returns 403 for cross-org bot', async () => {
+      vi.mocked(db.bot.findUnique).mockResolvedValueOnce({ orgId: ORG_B } as never);
+      const res = await app.inject({ method: 'GET', url: `/admin/bots/${BOT_B}/payments`, headers: { authorization: tokenA() } });
       expect(res.statusCode).toBe(403);
     });
   });

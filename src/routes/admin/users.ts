@@ -11,6 +11,12 @@ const RectifyUserSchema = z.object({
   locale: z.string().min(2).max(10).optional(),
 });
 
+const PaymentListQuerySchema = z.object({
+  status: z.enum(['pending', 'approved', 'rejected']).optional(),
+  endUserId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
 const userRoutes: FastifyPluginAsync = async (fastify) => {
   // List end users for a bot (hashed IDs only — no PII exposed)
   fastify.get<{ Params: { botId: string }; Querystring: { paused?: string } }>('/:botId/users', async (req, reply) => {
@@ -19,10 +25,56 @@ const userRoutes: FastifyPluginAsync = async (fastify) => {
 
     const users = await db.endUser.findMany({
       where: { botId, ...(paused !== undefined ? { paused } : {}) },
-      select: { id: true, botId: true, locale: true, paused: true, createdAt: true },
+      select: {
+        id: true,
+        botId: true,
+        locale: true,
+        paused: true,
+        freeMsgUsed: true,
+        membershipUntil: true,
+        createdAt: true,
+      },
       orderBy: { createdAt: 'desc' },
     });
     return reply.send(users);
+  });
+
+  fastify.get<{ Params: { botId: string } }>('/:botId/payments', async (req, reply) => {
+    const { botId } = req.params;
+    const { status, endUserId, limit } = parseBody(PaymentListQuerySchema, req.query);
+
+    const payments = await db.payment.findMany({
+      where: {
+        botId,
+        ...(status ? { status } : {}),
+        ...(endUserId ? { endUserId } : {}),
+      },
+      select: {
+        id: true,
+        botId: true,
+        endUserId: true,
+        provider: true,
+        status: true,
+        amount: true,
+        currency: true,
+        createdAt: true,
+        paidAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit ?? 50,
+    });
+
+    return reply.send(
+      payments.map((payment) => ({
+        ...payment,
+        amount:
+          payment.amount == null
+            ? null
+            : typeof payment.amount === 'object' && 'toNumber' in payment.amount
+              ? payment.amount.toNumber()
+              : Number(payment.amount),
+      })),
+    );
   });
 
   // Delete all data for an end user (Derecho ARCO — right to erasure)
