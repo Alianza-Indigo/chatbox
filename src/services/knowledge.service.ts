@@ -1,7 +1,6 @@
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import mammoth from 'mammoth';
-import pdfParse, { PDFParse } from 'pdf-parse';
 import XLSX from 'xlsx';
 import { GoogleGenAI } from '@google/genai';
 import { Prisma } from '@prisma/client';
@@ -99,6 +98,7 @@ export async function clearEmbeddingVector(knowledgeId: string): Promise<void> {
 }
 
 export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  const { default: pdfParse } = await import('pdf-parse');
   const parsed = await pdfParse(buffer);
   return normalizeExtractedText(parsed.text ?? '');
 }
@@ -112,6 +112,7 @@ export async function extractTextFromPdfWithOcrFallback(
   const extractedText = await extractTextFromPdf(buffer);
   if (extractedText) return extractedText;
 
+  const { PDFParse } = await import('pdf-parse');
   const parser = new PDFParse({ data: buffer });
   try {
     const screenshots = await parser.getScreenshot({
