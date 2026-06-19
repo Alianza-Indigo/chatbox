@@ -5,8 +5,10 @@ import {
   buildKnowledgeChunksFromText,
   clearEmbeddingVector,
   extractTextFromDocument,
+  extractTextFromImage,
   generateEmbedding,
   getSupportedDocumentExtension,
+  type SupportedImageExtension,
   encodeEmbedding,
   saveEmbeddingVector,
 } from '../../services/knowledge.service';
@@ -34,8 +36,17 @@ const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
 
     const sourceBuffer = await file.toBuffer();
     const sourceTitle = formatDocumentTitle(file.filename);
-    const extractedText = await extractTextFromDocument(sourceBuffer, extension);
-    const chunks = buildKnowledgeChunksFromText(sourceTitle, extractedText, undefined, [extension]);
+    let extractedText = '';
+    try {
+      extractedText = isImageExtension(extension)
+        ? await extractTextFromConfiguredProvider(sourceBuffer, extension, bot)
+        : await extractTextFromDocument(sourceBuffer, extension);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not extract text from document';
+      return reply.status(422).send({ error: message });
+    }
+    const chunkTags = isImageExtension(extension) ? [extension, 'ocr'] : [extension];
+    const chunks = buildKnowledgeChunksFromText(sourceTitle, extractedText, undefined, chunkTags);
     if (!chunks.length) {
       return reply.status(422).send({ error: 'The document does not contain readable text' });
     }
@@ -191,6 +202,22 @@ function resolveEmbeddingApiKey(
 function formatDocumentTitle(filename?: string): string {
   const raw = (filename ?? 'Documento').replace(/\.[a-z0-9]+$/i, '').trim();
   return raw || 'Documento';
+}
+
+async function extractTextFromConfiguredProvider(
+  buffer: Buffer,
+  extension: SupportedImageExtension,
+  bot: { llmProvider: string | null; llmModel: string | null; llmApiKeyEnc: Buffer | Uint8Array | null },
+): Promise<string> {
+  if (!bot.llmProvider || !bot.llmModel || !bot.llmApiKeyEnc) {
+    throw new Error('Image OCR requires the bot to have its provider, model, and API key configured');
+  }
+  const apiKey = decrypt(bot.llmApiKeyEnc);
+  return extractTextFromImage(buffer, extension, bot.llmProvider, apiKey, bot.llmModel);
+}
+
+function isImageExtension(extension: string): extension is SupportedImageExtension {
+  return extension === 'png' || extension === 'jpg' || extension === 'jpeg' || extension === 'webp';
 }
 
 export default knowledgeRoutes;

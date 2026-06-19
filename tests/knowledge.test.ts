@@ -36,6 +36,7 @@ import {
   decodeEmbedding,
   generateEmbedding,
   extractTextFromPdf,
+  extractTextFromImage,
   buildKnowledgeChunksFromText,
   getSupportedDocumentExtension,
   clearEmbeddingVector,
@@ -204,7 +205,14 @@ describe('PDF extraction and chunking', () => {
   it('detects supported document formats by filename or mimetype', () => {
     expect(getSupportedDocumentExtension('archivo.docx', 'application/octet-stream')).toBe('docx');
     expect(getSupportedDocumentExtension(undefined, 'application/vnd.ms-excel')).toBe('xls');
+    expect(getSupportedDocumentExtension('captura.png', 'application/octet-stream')).toBe('png');
     expect(getSupportedDocumentExtension('desconocido.bin', 'application/octet-stream')).toBeNull();
+  });
+
+  it('rejects OCR on unsupported providers', async () => {
+    await expect(extractTextFromImage(Buffer.from('img'), 'png', 'mistral', 'fake-key', 'mistral-small')).rejects.toThrow(
+      'OCR is not supported for provider "mistral"',
+    );
   });
 });
 

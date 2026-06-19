@@ -161,7 +161,7 @@ export const openApiSpec = {
         type: 'object',
         properties: {
           sourceTitle: { type: 'string' },
-          sourceType: { type: 'string', enum: ['pdf', 'docx', 'txt', 'csv', 'xlsx', 'xls'] },
+          sourceType: { type: 'string', enum: ['pdf', 'docx', 'txt', 'csv', 'xlsx', 'xls', 'png', 'jpg', 'jpeg', 'webp'] },
           created: { type: 'integer' },
           embedded: { type: 'integer' },
           failed: { type: 'integer' },
@@ -995,7 +995,7 @@ export const openApiSpec = {
         tags: ['Knowledge'],
         summary: 'Upload a supported document into the bot knowledge base',
         description:
-          'Extracts readable text from pdf/docx/txt/csv/xlsx/xls, splits it into chunked knowledge items, and attempts embeddings immediately when an OpenAI key is configured.',
+          'Extracts readable text from pdf/docx/txt/csv/xlsx/xls, and OCR text from png/jpg/jpeg/webp using the bot provider/model already configured by the user. Splits the result into chunked knowledge items and attempts embeddings immediately when an embedding key is configured.',
         parameters: [{ name: 'botId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
         requestBody: {
           required: true,

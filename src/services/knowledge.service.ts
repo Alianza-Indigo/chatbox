@@ -1,7 +1,9 @@
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse';
 import XLSX from 'xlsx';
+import { GoogleGenAI } from '@google/genai';
 import { Prisma } from '@prisma/client';
 import type { BotKnowledge } from '@prisma/client';
 import { db } from '../db';
@@ -13,8 +15,12 @@ const TOP_N = 3;
 const INPROCESS_WARN_THRESHOLD = 5_000;
 const DEFAULT_CHUNK_CHARS = 3_000;
 const SUPPORTED_DOCUMENT_EXTENSIONS = ['pdf', 'docx', 'txt', 'csv', 'xlsx', 'xls'] as const;
+const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
+const OCR_PROMPT = 'Extract all readable text from this image. Return plain text only. Preserve line breaks when helpful. Do not translate, summarize, or add commentary. If there is no readable text, return an empty string.';
 
 export type SupportedDocumentExtension = (typeof SUPPORTED_DOCUMENT_EXTENSIONS)[number];
+export type SupportedImageExtension = (typeof SUPPORTED_IMAGE_EXTENSIONS)[number];
+export type SupportedKnowledgeUploadExtension = SupportedDocumentExtension | SupportedImageExtension;
 
 // ─── Embedding codec ──────────────────────────────────────────────────────────
 
@@ -113,13 +119,100 @@ export async function extractTextFromDocument(
   }
 }
 
-export function getSupportedDocumentExtension(filename?: string, mimetype?: string): SupportedDocumentExtension | null {
+export async function extractTextFromImage(
+  buffer: Buffer,
+  extension: SupportedImageExtension,
+  provider: string,
+  apiKey: string,
+  model: string,
+): Promise<string> {
+  const mimeType = imageExtensionToMimeType(extension);
+  const base64 = buffer.toString('base64');
+
+  switch (provider) {
+    case 'openai': {
+      const client = new OpenAI({ apiKey });
+      const response = await client.chat.completions.create({
+        model,
+        temperature: 0,
+        max_tokens: 4096,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: OCR_PROMPT },
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+            ],
+          },
+        ],
+      });
+      return normalizeExtractedText(response.choices[0]?.message?.content ?? '');
+    }
+    case 'anthropic': {
+      const client = new Anthropic({ apiKey });
+      const response = await client.messages.create({
+        model,
+        max_tokens: 4096,
+        temperature: 0,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: OCR_PROMPT },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: mimeType as 'image/png' | 'image/jpeg' | 'image/webp',
+                  data: base64,
+                },
+              },
+            ],
+          },
+        ],
+      });
+      const text = response.content
+        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n');
+      return normalizeExtractedText(text);
+    }
+    case 'google': {
+      const client = new GoogleGenAI({ apiKey });
+      const response = await client.models.generateContent({
+        model,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: OCR_PROMPT },
+              { inlineData: { mimeType, data: base64 } },
+            ],
+          },
+        ],
+        config: {
+          temperature: 0,
+          maxOutputTokens: 4096,
+        },
+      });
+      return normalizeExtractedText(response.text ?? '');
+    }
+    default:
+      throw new Error(`OCR is not supported for provider "${provider}"`);
+  }
+}
+
+export function getSupportedDocumentExtension(filename?: string, mimetype?: string): SupportedKnowledgeUploadExtension | null {
   const fromName = filename?.split('.').pop()?.trim().toLowerCase();
-  if (fromName && SUPPORTED_DOCUMENT_EXTENSIONS.includes(fromName as SupportedDocumentExtension)) {
-    return fromName as SupportedDocumentExtension;
+  if (
+    fromName &&
+    (SUPPORTED_DOCUMENT_EXTENSIONS.includes(fromName as SupportedDocumentExtension) ||
+      SUPPORTED_IMAGE_EXTENSIONS.includes(fromName as SupportedImageExtension))
+  ) {
+    return fromName as SupportedKnowledgeUploadExtension;
   }
 
-  const mimeMap: Record<string, SupportedDocumentExtension> = {
+  const mimeMap: Record<string, SupportedKnowledgeUploadExtension> = {
     'application/pdf': 'pdf',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
     'text/plain': 'txt',
@@ -127,12 +220,15 @@ export function getSupportedDocumentExtension(filename?: string, mimetype?: stri
     'application/csv': 'csv',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
     'application/vnd.ms-excel': 'xls',
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/webp': 'webp',
   };
   return mimeMap[mimetype ?? ''] ?? null;
 }
 
 export function getSupportedDocumentAcceptList(): string {
-  return '.pdf,.docx,.txt,.csv,.xlsx,.xls';
+  return '.pdf,.docx,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.webp';
 }
 
 export function buildKnowledgeChunksFromText(
@@ -370,4 +466,10 @@ function extractTextFromWorkbook(buffer: Buffer): string {
   }).filter(Boolean);
 
   return normalizeExtractedText(sheetTexts.join('\n\n'));
+}
+
+function imageExtensionToMimeType(extension: SupportedImageExtension): string {
+  if (extension === 'png') return 'image/png';
+  if (extension === 'webp') return 'image/webp';
+  return 'image/jpeg';
 }
