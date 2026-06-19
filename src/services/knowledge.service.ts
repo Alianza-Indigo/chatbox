@@ -1,5 +1,7 @@
 import OpenAI from 'openai';
+import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse';
+import XLSX from 'xlsx';
 import { Prisma } from '@prisma/client';
 import type { BotKnowledge } from '@prisma/client';
 import { db } from '../db';
@@ -10,6 +12,9 @@ const TOP_N = 3;
 // Above this threshold the in-process O(N) cosine scan becomes a latency concern
 const INPROCESS_WARN_THRESHOLD = 5_000;
 const DEFAULT_CHUNK_CHARS = 3_000;
+const SUPPORTED_DOCUMENT_EXTENSIONS = ['pdf', 'docx', 'txt', 'csv', 'xlsx', 'xls'] as const;
+
+export type SupportedDocumentExtension = (typeof SUPPORTED_DOCUMENT_EXTENSIONS)[number];
 
 // ─── Embedding codec ──────────────────────────────────────────────────────────
 
@@ -85,10 +90,56 @@ export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   return normalizeExtractedText(parsed.text ?? '');
 }
 
+export async function extractTextFromDocument(
+  buffer: Buffer,
+  extension: SupportedDocumentExtension,
+): Promise<string> {
+  switch (extension) {
+    case 'pdf':
+      return extractTextFromPdf(buffer);
+    case 'docx': {
+      const result = await mammoth.extractRawText({ buffer });
+      return normalizeExtractedText(result.value ?? '');
+    }
+    case 'txt':
+      return normalizeExtractedText(buffer.toString('utf8'));
+    case 'csv':
+      return normalizeExtractedText(buffer.toString('utf8'));
+    case 'xlsx':
+    case 'xls':
+      return extractTextFromWorkbook(buffer);
+    default:
+      return '';
+  }
+}
+
+export function getSupportedDocumentExtension(filename?: string, mimetype?: string): SupportedDocumentExtension | null {
+  const fromName = filename?.split('.').pop()?.trim().toLowerCase();
+  if (fromName && SUPPORTED_DOCUMENT_EXTENSIONS.includes(fromName as SupportedDocumentExtension)) {
+    return fromName as SupportedDocumentExtension;
+  }
+
+  const mimeMap: Record<string, SupportedDocumentExtension> = {
+    'application/pdf': 'pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'text/plain': 'txt',
+    'text/csv': 'csv',
+    'application/csv': 'csv',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+    'application/vnd.ms-excel': 'xls',
+  };
+  return mimeMap[mimetype ?? ''] ?? null;
+}
+
+export function getSupportedDocumentAcceptList(): string {
+  return '.pdf,.docx,.txt,.csv,.xlsx,.xls';
+}
+
 export function buildKnowledgeChunksFromText(
   title: string,
   text: string,
   maxChars = DEFAULT_CHUNK_CHARS,
+  tags: string[] = [],
 ): Array<{ title: string; content: string; tags: string[] }> {
   const normalized = normalizeExtractedText(text);
   if (!normalized) return [];
@@ -105,7 +156,7 @@ export function buildKnowledgeChunksFromText(
   return chunks.map((content, index) => ({
     title: total === 1 ? title : `${title} (${index + 1}/${total})`,
     content,
-    tags: ['pdf'],
+    tags,
   }));
 }
 
@@ -307,4 +358,16 @@ function mergeSegments(segments: string[], maxChars: number): string[] {
 
   if (current.trim()) chunks.push(current.trim());
   return chunks;
+}
+
+function extractTextFromWorkbook(buffer: Buffer): string {
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheetTexts = workbook.SheetNames.map((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_csv(sheet, { blankrows: false }).trim();
+    if (!rows) return '';
+    return `[Hoja: ${sheetName}]\n${rows}`;
+  }).filter(Boolean);
+
+  return normalizeExtractedText(sheetTexts.join('\n\n'));
 }

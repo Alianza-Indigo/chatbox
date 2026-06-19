@@ -161,6 +161,7 @@ export const openApiSpec = {
         type: 'object',
         properties: {
           sourceTitle: { type: 'string' },
+          sourceType: { type: 'string', enum: ['pdf', 'docx', 'txt', 'csv', 'xlsx', 'xls'] },
           created: { type: 'integer' },
           embedded: { type: 'integer' },
           failed: { type: 'integer' },
@@ -989,12 +990,12 @@ export const openApiSpec = {
         },
       },
     },
-    '/admin/bots/{botId}/knowledge/upload-pdf': {
+    '/admin/bots/{botId}/knowledge/upload-document': {
       post: {
         tags: ['Knowledge'],
-        summary: 'Upload a PDF into the bot knowledge base',
+        summary: 'Upload a supported document into the bot knowledge base',
         description:
-          'Extracts readable text from a PDF, splits it into chunked knowledge items, and attempts embeddings immediately when an OpenAI key is configured.',
+          'Extracts readable text from pdf/docx/txt/csv/xlsx/xls, splits it into chunked knowledge items, and attempts embeddings immediately when an OpenAI key is configured.',
         parameters: [{ name: 'botId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
         requestBody: {
           required: true,
@@ -1012,13 +1013,13 @@ export const openApiSpec = {
         },
         responses: {
           201: {
-            description: 'PDF imported',
+            description: 'Document imported',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/KnowledgeUploadResult' } } },
           },
           400: { description: 'Missing file' },
           403: { description: 'Forbidden' },
           404: { description: 'Bot not found' },
-          415: { description: 'Only PDF supported' },
+          415: { description: 'Unsupported format' },
           422: { description: 'No readable text found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },

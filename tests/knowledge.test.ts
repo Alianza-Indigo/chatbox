@@ -37,6 +37,7 @@ import {
   generateEmbedding,
   extractTextFromPdf,
   buildKnowledgeChunksFromText,
+  getSupportedDocumentExtension,
   clearEmbeddingVector,
 } from '../src/services/knowledge.service';
 
@@ -194,10 +195,16 @@ describe('PDF extraction and chunking', () => {
       'Tercer parrafo para cerrar el documento.',
     ].join('\n\n');
 
-    const chunks = buildKnowledgeChunksFromText('Manual', text, 70);
+    const chunks = buildKnowledgeChunksFromText('Manual', text, 70, ['pdf']);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks[0].title).toContain('Manual');
     expect(chunks.every((chunk) => chunk.tags.includes('pdf'))).toBe(true);
+  });
+
+  it('detects supported document formats by filename or mimetype', () => {
+    expect(getSupportedDocumentExtension('archivo.docx', 'application/octet-stream')).toBe('docx');
+    expect(getSupportedDocumentExtension(undefined, 'application/vnd.ms-excel')).toBe('xls');
+    expect(getSupportedDocumentExtension('desconocido.bin', 'application/octet-stream')).toBeNull();
   });
 });
 

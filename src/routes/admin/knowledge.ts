@@ -1,11 +1,12 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { db } from '../../db';
 import { invalidateBotCache } from '../../services/bot.service';
 import {
   buildKnowledgeChunksFromText,
   clearEmbeddingVector,
-  extractTextFromPdf,
+  extractTextFromDocument,
   generateEmbedding,
+  getSupportedDocumentExtension,
   encodeEmbedding,
   saveEmbeddingVector,
 } from '../../services/knowledge.service';
@@ -14,6 +15,70 @@ import { requirePermission } from '../../lib/rbac';
 import { parseBody, KnowledgeSchema, UpdateKnowledgeSchema } from '../../lib/validate';
 
 const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
+  const handleDocumentUpload = async (
+    req: FastifyRequest<{ Params: { botId: string } }>,
+    reply: FastifyReply,
+  ) => {
+    const file = await req.file();
+    if (!file) return reply.status(400).send({ error: 'Document file is required' });
+    const extension = getSupportedDocumentExtension(file.filename, file.mimetype);
+    if (!extension) {
+      return reply.status(415).send({ error: 'Supported formats: pdf, docx, txt, csv, xlsx, xls' });
+    }
+
+    const bot = await db.bot.findUnique({
+      where: { id: req.params.botId },
+      include: { integrations: { where: { kind: 'embeddings', status: 'active' } } },
+    });
+    if (!bot) return reply.status(404).send({ error: 'Bot not found' });
+
+    const sourceBuffer = await file.toBuffer();
+    const sourceTitle = formatDocumentTitle(file.filename);
+    const extractedText = await extractTextFromDocument(sourceBuffer, extension);
+    const chunks = buildKnowledgeChunksFromText(sourceTitle, extractedText, undefined, [extension]);
+    if (!chunks.length) {
+      return reply.status(422).send({ error: 'The document does not contain readable text' });
+    }
+
+    const createdItems = await db.$transaction(
+      chunks.map((chunk) =>
+        db.botKnowledge.create({
+          data: { botId: req.params.botId, title: chunk.title, content: chunk.content, tags: chunk.tags },
+        }),
+      ),
+    );
+
+    const embedApiKey = resolveEmbeddingApiKey(bot.integrations, bot.llmProvider, bot.llmApiKeyEnc);
+    let embedded = 0;
+    let failed = 0;
+
+    if (embedApiKey) {
+      for (const item of createdItems) {
+        try {
+          const vec = await generateEmbedding(`${item.title}\n${item.content}`, embedApiKey);
+          await db.botKnowledge.update({
+            where: { id: item.id },
+            data: { embeddingData: encodeEmbedding(vec), hasEmbedding: true },
+          });
+          await saveEmbeddingVector(item.id, vec).catch(() => { /* pgvector unavailable */ });
+          embedded++;
+        } catch {
+          failed++;
+        }
+      }
+    }
+
+    invalidateBotCache(req.params.botId);
+    return reply.status(201).send({
+      sourceTitle,
+      sourceType: extension,
+      created: createdItems.length,
+      embedded,
+      failed,
+      totalChunks: chunks.length,
+    });
+  };
+
   fastify.get<{ Params: { botId: string } }>('/:botId/knowledge', async (req, reply) => {
     const items = await db.botKnowledge.findMany({
       where: { botId: req.params.botId },
@@ -63,63 +128,12 @@ const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.status(204).send();
   });
 
+  fastify.post<{ Params: { botId: string } }>('/:botId/knowledge/upload-document', { preHandler: [requirePermission('bot:update-knowledge')] }, async (req, reply) => {
+    return handleDocumentUpload(req, reply);
+  });
+
   fastify.post<{ Params: { botId: string } }>('/:botId/knowledge/upload-pdf', { preHandler: [requirePermission('bot:update-knowledge')] }, async (req, reply) => {
-    const file = await req.file();
-    if (!file) return reply.status(400).send({ error: 'PDF file is required' });
-    if (file.mimetype !== 'application/pdf') {
-      return reply.status(415).send({ error: 'Only PDF uploads are supported' });
-    }
-
-    const bot = await db.bot.findUnique({
-      where: { id: req.params.botId },
-      include: { integrations: { where: { kind: 'embeddings', status: 'active' } } },
-    });
-    if (!bot) return reply.status(404).send({ error: 'Bot not found' });
-
-    const pdfBuffer = await file.toBuffer();
-    const sourceTitle = formatPdfTitle(file.filename);
-    const extractedText = await extractTextFromPdf(pdfBuffer);
-    const chunks = buildKnowledgeChunksFromText(sourceTitle, extractedText);
-    if (!chunks.length) {
-      return reply.status(422).send({ error: 'The PDF does not contain readable text' });
-    }
-
-    const createdItems = await db.$transaction(
-      chunks.map((chunk) =>
-        db.botKnowledge.create({
-          data: { botId: req.params.botId, title: chunk.title, content: chunk.content, tags: chunk.tags },
-        }),
-      ),
-    );
-
-    const embedApiKey = resolveEmbeddingApiKey(bot.integrations, bot.llmProvider, bot.llmApiKeyEnc);
-    let embedded = 0;
-    let failed = 0;
-
-    if (embedApiKey) {
-      for (const item of createdItems) {
-        try {
-          const vec = await generateEmbedding(`${item.title}\n${item.content}`, embedApiKey);
-          await db.botKnowledge.update({
-            where: { id: item.id },
-            data: { embeddingData: encodeEmbedding(vec), hasEmbedding: true },
-          });
-          await saveEmbeddingVector(item.id, vec).catch(() => { /* pgvector unavailable */ });
-          embedded++;
-        } catch {
-          failed++;
-        }
-      }
-    }
-
-    invalidateBotCache(req.params.botId);
-    return reply.status(201).send({
-      sourceTitle,
-      created: createdItems.length,
-      embedded,
-      failed,
-      totalChunks: chunks.length,
-    });
+    return handleDocumentUpload(req, reply);
   });
 
   // Generate / refresh embeddings for all knowledge entries of a bot.
@@ -174,9 +188,9 @@ function resolveEmbeddingApiKey(
   return undefined;
 }
 
-function formatPdfTitle(filename?: string): string {
-  const raw = (filename ?? 'Documento PDF').replace(/\.pdf$/i, '').trim();
-  return raw || 'Documento PDF';
+function formatDocumentTitle(filename?: string): string {
+  const raw = (filename ?? 'Documento').replace(/\.[a-z0-9]+$/i, '').trim();
+  return raw || 'Documento';
 }
 
 export default knowledgeRoutes;
