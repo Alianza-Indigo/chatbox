@@ -1,16 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotKnowledge } from '@prisma/client';
 
-const { mockEmbeddingsCreate, mockQueryRaw, mockExecuteRaw } = vi.hoisted(() => ({
+const { mockEmbeddingsCreate, mockQueryRaw, mockExecuteRaw, mockPdfParse } = vi.hoisted(() => ({
   mockEmbeddingsCreate: vi.fn().mockResolvedValue({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
   mockQueryRaw: vi.fn().mockRejectedValue(new Error('pgvector unavailable in tests')),
   mockExecuteRaw: vi.fn(),
+  mockPdfParse: vi.fn(),
 }));
 
 vi.mock('openai', () => ({
   default: vi.fn().mockImplementation(() => ({
     embeddings: { create: mockEmbeddingsCreate },
   })),
+}));
+
+vi.mock('pdf-parse', () => ({
+  default: mockPdfParse,
 }));
 
 vi.mock('../src/db', () => ({
@@ -30,6 +35,8 @@ import {
   encodeEmbedding,
   decodeEmbedding,
   generateEmbedding,
+  extractTextFromPdf,
+  buildKnowledgeChunksFromText,
   clearEmbeddingVector,
 } from '../src/services/knowledge.service';
 
@@ -166,6 +173,31 @@ describe('generateEmbedding', () => {
     expect(mockEmbeddingsCreate).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'text-embedding-3-small', input: 'test text' }),
     );
+  });
+});
+
+describe('PDF extraction and chunking', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('normalizes extracted PDF text', async () => {
+    mockPdfParse.mockResolvedValueOnce({ text: 'Titulo\r\n\r\nLinea 1   \nLinea 2\n\n\nLinea 3' });
+    const text = await extractTextFromPdf(Buffer.from('fake pdf'));
+    expect(text).toBe('Titulo\n\nLinea 1\nLinea 2\n\nLinea 3');
+  });
+
+  it('splits long PDF text into titled chunks', () => {
+    const text = [
+      'Primer parrafo con bastante texto para obligar chunking.',
+      'Segundo parrafo con aun mas contenido para dividirlo en varias partes.',
+      'Tercer parrafo para cerrar el documento.',
+    ].join('\n\n');
+
+    const chunks = buildKnowledgeChunksFromText('Manual', text, 70);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0].title).toContain('Manual');
+    expect(chunks.every((chunk) => chunk.tags.includes('pdf'))).toBe(true);
   });
 });
 

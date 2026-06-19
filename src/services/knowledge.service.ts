@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import pdfParse from 'pdf-parse';
 import { Prisma } from '@prisma/client';
 import type { BotKnowledge } from '@prisma/client';
 import { db } from '../db';
@@ -8,6 +9,7 @@ const SIMILARITY_THRESHOLD = 0.35;
 const TOP_N = 3;
 // Above this threshold the in-process O(N) cosine scan becomes a latency concern
 const INPROCESS_WARN_THRESHOLD = 5_000;
+const DEFAULT_CHUNK_CHARS = 3_000;
 
 // ─── Embedding codec ──────────────────────────────────────────────────────────
 
@@ -76,6 +78,35 @@ export async function clearEmbeddingVector(knowledgeId: string): Promise<void> {
       WHERE "id" = ${knowledgeId}
     `,
   );
+}
+
+export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  const parsed = await pdfParse(buffer);
+  return normalizeExtractedText(parsed.text ?? '');
+}
+
+export function buildKnowledgeChunksFromText(
+  title: string,
+  text: string,
+  maxChars = DEFAULT_CHUNK_CHARS,
+): Array<{ title: string; content: string; tags: string[] }> {
+  const normalized = normalizeExtractedText(text);
+  if (!normalized) return [];
+
+  const paragraphs = normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  const segments = paragraphs.flatMap((paragraph) => splitLongSegment(paragraph, maxChars));
+  const chunks = mergeSegments(segments, maxChars);
+  const total = chunks.length;
+
+  return chunks.map((content, index) => ({
+    title: total === 1 ? title : `${title} (${index + 1}/${total})`,
+    content,
+    tags: ['pdf'],
+  }));
 }
 
 // ─── Retrieval ────────────────────────────────────────────────────────────────
@@ -190,4 +221,90 @@ async function semanticRetrieval(
 function formatKnowledge(entries: Pick<BotKnowledge, 'title' | 'content'>[]): string {
   if (!entries.length) return '';
   return entries.map(k => `[${k.title}]\n${k.content}`).join('\n\n');
+}
+
+function normalizeExtractedText(text: string): string {
+  return text
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+function splitLongSegment(segment: string, maxChars: number): string[] {
+  if (segment.length <= maxChars) return [segment];
+
+  const pieces: string[] = [];
+  const sentences = segment.split(/(?<=[.!?])\s+/).filter(Boolean);
+  let current = '';
+
+  for (const sentence of sentences) {
+    if (sentence.length > maxChars) {
+      if (current) {
+        pieces.push(current.trim());
+        current = '';
+      }
+      pieces.push(...splitByWords(sentence, maxChars));
+      continue;
+    }
+
+    const next = current ? `${current} ${sentence}` : sentence;
+    if (next.length > maxChars) {
+      pieces.push(current.trim());
+      current = sentence;
+    } else {
+      current = next;
+    }
+  }
+
+  if (current.trim()) pieces.push(current.trim());
+  return pieces;
+}
+
+function splitByWords(text: string, maxChars: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+
+  const pieces: string[] = [];
+  let current = '';
+
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length > maxChars && current) {
+      pieces.push(current.trim());
+      current = word;
+    } else if (word.length > maxChars) {
+      if (current) {
+        pieces.push(current.trim());
+        current = '';
+      }
+      for (let start = 0; start < word.length; start += maxChars) {
+        pieces.push(word.slice(start, start + maxChars));
+      }
+    } else {
+      current = next;
+    }
+  }
+
+  if (current.trim()) pieces.push(current.trim());
+  return pieces;
+}
+
+function mergeSegments(segments: string[], maxChars: number): string[] {
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const segment of segments) {
+    const next = current ? `${current}\n\n${segment}` : segment;
+    if (next.length > maxChars && current) {
+      chunks.push(current.trim());
+      current = segment;
+    } else {
+      current = next;
+    }
+  }
+
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
 }

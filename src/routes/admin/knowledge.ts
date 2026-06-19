@@ -1,7 +1,14 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { db } from '../../db';
 import { invalidateBotCache } from '../../services/bot.service';
-import { clearEmbeddingVector, generateEmbedding, encodeEmbedding, saveEmbeddingVector } from '../../services/knowledge.service';
+import {
+  buildKnowledgeChunksFromText,
+  clearEmbeddingVector,
+  extractTextFromPdf,
+  generateEmbedding,
+  encodeEmbedding,
+  saveEmbeddingVector,
+} from '../../services/knowledge.service';
 import { decrypt, decryptJson } from '../../crypto';
 import { requirePermission } from '../../lib/rbac';
 import { parseBody, KnowledgeSchema, UpdateKnowledgeSchema } from '../../lib/validate';
@@ -56,6 +63,65 @@ const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.status(204).send();
   });
 
+  fastify.post<{ Params: { botId: string } }>('/:botId/knowledge/upload-pdf', { preHandler: [requirePermission('bot:update-knowledge')] }, async (req, reply) => {
+    const file = await req.file();
+    if (!file) return reply.status(400).send({ error: 'PDF file is required' });
+    if (file.mimetype !== 'application/pdf') {
+      return reply.status(415).send({ error: 'Only PDF uploads are supported' });
+    }
+
+    const bot = await db.bot.findUnique({
+      where: { id: req.params.botId },
+      include: { integrations: { where: { kind: 'embeddings', status: 'active' } } },
+    });
+    if (!bot) return reply.status(404).send({ error: 'Bot not found' });
+
+    const pdfBuffer = await file.toBuffer();
+    const sourceTitle = formatPdfTitle(file.filename);
+    const extractedText = await extractTextFromPdf(pdfBuffer);
+    const chunks = buildKnowledgeChunksFromText(sourceTitle, extractedText);
+    if (!chunks.length) {
+      return reply.status(422).send({ error: 'The PDF does not contain readable text' });
+    }
+
+    const createdItems = await db.$transaction(
+      chunks.map((chunk) =>
+        db.botKnowledge.create({
+          data: { botId: req.params.botId, title: chunk.title, content: chunk.content, tags: chunk.tags },
+        }),
+      ),
+    );
+
+    const embedApiKey = resolveEmbeddingApiKey(bot.integrations, bot.llmProvider, bot.llmApiKeyEnc);
+    let embedded = 0;
+    let failed = 0;
+
+    if (embedApiKey) {
+      for (const item of createdItems) {
+        try {
+          const vec = await generateEmbedding(`${item.title}\n${item.content}`, embedApiKey);
+          await db.botKnowledge.update({
+            where: { id: item.id },
+            data: { embeddingData: encodeEmbedding(vec), hasEmbedding: true },
+          });
+          await saveEmbeddingVector(item.id, vec).catch(() => { /* pgvector unavailable */ });
+          embedded++;
+        } catch {
+          failed++;
+        }
+      }
+    }
+
+    invalidateBotCache(req.params.botId);
+    return reply.status(201).send({
+      sourceTitle,
+      created: createdItems.length,
+      embedded,
+      failed,
+      totalChunks: chunks.length,
+    });
+  });
+
   // Generate / refresh embeddings for all knowledge entries of a bot.
   // Uses the bot's OpenAI LLM key if available; otherwise a dedicated embeddings integration.
   fastify.post<{ Params: { botId: string } }>('/:botId/knowledge/embed', { preHandler: [requirePermission('bot:update-knowledge')] }, async (req, reply) => {
@@ -65,15 +131,7 @@ const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     });
     if (!bot) return reply.status(404).send({ error: 'Bot not found' });
 
-    // Resolve the embedding API key
-    let embedApiKey: string | undefined;
-    if (bot.integrations.length > 0) {
-      const creds = decryptJson<{ apiKey: string }>(bot.integrations[0].credentials);
-      embedApiKey = creds.apiKey;
-    } else if (bot.llmProvider === 'openai' && bot.llmApiKeyEnc) {
-      embedApiKey = decrypt(bot.llmApiKeyEnc);
-    }
-
+    const embedApiKey = resolveEmbeddingApiKey(bot.integrations, bot.llmProvider, bot.llmApiKeyEnc);
     if (!embedApiKey) {
       return reply.status(422).send({ error: 'No embedding API key configured. Add an OpenAI LLM key or a dedicated embeddings integration.' });
     }
@@ -100,5 +158,25 @@ const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ updated, failed, total: bot.knowledge.length });
   });
 };
+
+function resolveEmbeddingApiKey(
+  integrations: Array<{ credentials: Buffer | Uint8Array }>,
+  llmProvider?: string | null,
+  llmApiKeyEnc?: Buffer | Uint8Array | null,
+): string | undefined {
+  if (integrations.length > 0) {
+    const creds = decryptJson<{ apiKey: string }>(integrations[0].credentials);
+    if (creds.apiKey) return creds.apiKey;
+  }
+  if (llmProvider === 'openai' && llmApiKeyEnc) {
+    return decrypt(llmApiKeyEnc);
+  }
+  return undefined;
+}
+
+function formatPdfTitle(filename?: string): string {
+  const raw = (filename ?? 'Documento PDF').replace(/\.pdf$/i, '').trim();
+  return raw || 'Documento PDF';
+}
 
 export default knowledgeRoutes;

@@ -157,6 +157,16 @@ export const openApiSpec = {
           hasEmbedding: { type: 'boolean' },
         },
       },
+      KnowledgeUploadResult: {
+        type: 'object',
+        properties: {
+          sourceTitle: { type: 'string' },
+          created: { type: 'integer' },
+          embedded: { type: 'integer' },
+          failed: { type: 'integer' },
+          totalChunks: { type: 'integer' },
+        },
+      },
       Organization: {
         type: 'object',
         properties: {
@@ -976,6 +986,40 @@ export const openApiSpec = {
         responses: {
           204: { description: 'Deleted' },
           404: { description: 'Not found' },
+        },
+      },
+    },
+    '/admin/bots/{botId}/knowledge/upload-pdf': {
+      post: {
+        tags: ['Knowledge'],
+        summary: 'Upload a PDF into the bot knowledge base',
+        description:
+          'Extracts readable text from a PDF, splits it into chunked knowledge items, and attempts embeddings immediately when an OpenAI key is configured.',
+        parameters: [{ name: 'botId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['file'],
+                properties: {
+                  file: { type: 'string', format: 'binary' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: {
+            description: 'PDF imported',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/KnowledgeUploadResult' } } },
+          },
+          400: { description: 'Missing file' },
+          403: { description: 'Forbidden' },
+          404: { description: 'Bot not found' },
+          415: { description: 'Only PDF supported' },
+          422: { description: 'No readable text found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
     },

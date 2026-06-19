@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -46,6 +47,12 @@ export function buildApp() {
 
   fastify.register(helmet);
   fastify.register(cors, { origin: false }); // Webhook + admin API — no browser CORS needed
+  fastify.register(multipart, {
+    limits: {
+      files: 1,
+      fileSize: 10 * 1024 * 1024,
+    },
+  });
 
   // OpenAPI spec (static mode — spec is maintained in src/openapi.ts)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
