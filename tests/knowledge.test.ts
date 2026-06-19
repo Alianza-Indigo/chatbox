@@ -41,6 +41,7 @@ import {
   buildKnowledgeChunksFromText,
   getSupportedDocumentExtension,
   clearEmbeddingVector,
+  previewRelevantKnowledge,
 } from '../src/services/knowledge.service';
 
 function makeEntry(id: string, title: string, content: string, tags: string[] = [], embeddingVec?: number[]): BotKnowledge {
@@ -162,6 +163,20 @@ describe('getRelevantKnowledge', () => {
 
     const result = await getRelevantKnowledge('bot-1', kbWithEmbeddings, 'serpiente transformacion', 'fake-key');
     expect(result).toContain('Serpientes');
+  });
+});
+
+describe('previewRelevantKnowledge', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockQueryRaw.mockRejectedValue(new Error('pgvector unavailable in tests'));
+  });
+
+  it('returns keyword mode and matching entries when there is no embedder key', async () => {
+    const result = await previewRelevantKnowledge('bot-1', KB, 'serpientes transformacion', undefined);
+    expect(result.mode).toBe('keyword');
+    expect(result.entries.map((entry) => entry.id)).toContain('e1');
+    expect(result.formatted).toContain('Serpientes en suenos');
   });
 });
 

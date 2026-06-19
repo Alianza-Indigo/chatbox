@@ -10,13 +10,14 @@ import {
   extractTextFromImage,
   generateEmbedding,
   getSupportedDocumentExtension,
+  previewRelevantKnowledge,
   type SupportedImageExtension,
   encodeEmbedding,
   saveEmbeddingVector,
 } from '../../services/knowledge.service';
 import { decrypt, decryptJson } from '../../crypto';
 import { requirePermission } from '../../lib/rbac';
-import { parseBody, KnowledgeSchema, UpdateKnowledgeSchema } from '../../lib/validate';
+import { parseBody, KnowledgeSchema, PreviewKnowledgeSchema, UpdateKnowledgeSchema } from '../../lib/validate';
 
 const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
   const handleDocumentUpload = async (
@@ -150,6 +151,31 @@ const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post<{ Params: { botId: string } }>('/:botId/knowledge/upload-pdf', { preHandler: [requirePermission('bot:update-knowledge')] }, async (req, reply) => {
     return handleDocumentUpload(req, reply);
+  });
+
+  fastify.post<{ Params: { botId: string } }>('/:botId/knowledge/preview', { preHandler: [requirePermission('bot:update-knowledge')] }, async (req, reply) => {
+    const { query } = parseBody(PreviewKnowledgeSchema, req.body);
+    const bot = await db.bot.findUnique({
+      where: { id: req.params.botId },
+      include: { knowledge: true, integrations: { where: { kind: 'embeddings', status: 'active' } } },
+    });
+    if (!bot) return reply.status(404).send({ error: 'Bot not found' });
+
+    const embedApiKey = resolveEmbeddingApiKey(bot.integrations, bot.llmProvider, bot.llmApiKeyEnc);
+    const result = await previewRelevantKnowledge(bot.id, bot.knowledge, query, embedApiKey);
+    return reply.send({
+      query,
+      mode: result.mode,
+      total: result.entries.length,
+      items: result.entries.map((entry) => ({
+        id: entry.id,
+        botId: entry.botId,
+        title: entry.title,
+        content: entry.content,
+        tags: entry.tags,
+        hasEmbedding: entry.hasEmbedding,
+      })),
+    });
   });
 
   // Generate / refresh embeddings for all knowledge entries of a bot.

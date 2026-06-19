@@ -168,6 +168,18 @@ export const openApiSpec = {
           totalChunks: { type: 'integer' },
         },
       },
+      KnowledgePreviewResult: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          mode: { type: 'string', enum: ['none', 'keyword', 'semantic', 'vector'] },
+          total: { type: 'integer' },
+          items: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/KnowledgeItem' },
+          },
+        },
+      },
       Organization: {
         type: 'object',
         properties: {
@@ -1021,6 +1033,37 @@ export const openApiSpec = {
           404: { description: 'Bot not found' },
           415: { description: 'Unsupported format' },
           422: { description: 'No readable text found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
+      },
+    },
+    '/admin/bots/{botId}/knowledge/preview': {
+      post: {
+        tags: ['Knowledge'],
+        summary: 'Preview knowledge retrieval for a bot',
+        description:
+          'Tests a user query against the bot knowledge base and returns the chunks the backend would retrieve, including whether the result came from vector, semantic, keyword, or no match.',
+        parameters: [{ name: 'botId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['query'],
+                properties: {
+                  query: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Knowledge retrieval preview',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/KnowledgePreviewResult' } } },
+          },
+          403: { description: 'Forbidden' },
+          404: { description: 'Bot not found' },
         },
       },
     },

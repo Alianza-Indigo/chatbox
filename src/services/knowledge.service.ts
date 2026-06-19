@@ -24,6 +24,7 @@ export const KNOWLEDGE_IMPORT_CHUNK_TAG_PREFIX = `${INTERNAL_KNOWLEDGE_TAG_PREFI
 export type SupportedDocumentExtension = (typeof SUPPORTED_DOCUMENT_EXTENSIONS)[number];
 export type SupportedImageExtension = (typeof SUPPORTED_IMAGE_EXTENSIONS)[number];
 export type SupportedKnowledgeUploadExtension = SupportedDocumentExtension | SupportedImageExtension;
+export type KnowledgeRetrievalMode = 'none' | 'keyword' | 'semantic' | 'vector';
 
 // ─── Embedding codec ──────────────────────────────────────────────────────────
 
@@ -302,43 +303,74 @@ export async function getRelevantKnowledge(
   query: string,
   embedderApiKey?: string,
 ): Promise<string> {
-  if (!knowledge.length) return '';
+  const result = await previewRelevantKnowledge(botId, knowledge, query, embedderApiKey);
+  return result.formatted;
+}
+
+export async function previewRelevantKnowledge(
+  botId: string,
+  knowledge: BotKnowledge[],
+  query: string,
+  embedderApiKey?: string,
+): Promise<{
+  mode: KnowledgeRetrievalMode;
+  entries: Pick<BotKnowledge, 'id' | 'botId' | 'title' | 'content' | 'tags' | 'hasEmbedding'>[];
+  formatted: string;
+}> {
+  if (!knowledge.length) {
+    return { mode: 'none', entries: [], formatted: '' };
+  }
 
   if (embedderApiKey) {
     const withEmbeddings = knowledge.filter(k => k.hasEmbedding);
     if (withEmbeddings.length > 0) {
-      // Try DB-side vector search first (pgvector path)
       try {
         const result = await vectorSearchDB(botId, query, embedderApiKey);
-        if (result !== null) return result;
+        if (result.length > 0) {
+          return { mode: 'vector', entries: result, formatted: formatKnowledge(result) };
+        }
       } catch {
         // pgvector not installed or embedding_vec column not populated — fall through
       }
 
-      // In-process cosine similarity (legacy / fallback path)
       try {
-        return await semanticRetrieval(knowledge, query, embedderApiKey);
+        const result = await semanticRetrieval(knowledge, query, embedderApiKey);
+        if (result.length > 0) {
+          return { mode: 'semantic', entries: result, formatted: formatKnowledge(result) };
+        }
       } catch {
         // Embedding generation failed — fall through to keyword
       }
     }
   }
 
-  // Keyword fallback — always available, no API call
-  return formatKnowledge(getByKeyword(knowledge, query).slice(0, TOP_N));
+  const keywordEntries = getByKeyword(knowledge, query).slice(0, TOP_N);
+  return {
+    mode: keywordEntries.length ? 'keyword' : 'none',
+    entries: keywordEntries,
+    formatted: formatKnowledge(keywordEntries),
+  };
 }
 
 // ─── Internals ────────────────────────────────────────────────────────────────
 
-/** DB-side ANN search using pgvector. Returns null if no results above threshold. */
-async function vectorSearchDB(botId: string, query: string, apiKey: string): Promise<string | null> {
+/** DB-side ANN search using pgvector. */
+async function vectorSearchDB(
+  botId: string,
+  query: string,
+  apiKey: string,
+): Promise<Array<Pick<BotKnowledge, 'id' | 'botId' | 'title' | 'content' | 'tags' | 'hasEmbedding'>>> {
   const vec = await generateEmbedding(query, apiKey);
   const vecStr = `[${vec.join(',')}]`;
 
-  const rows = await db.$queryRaw<Array<{ title: string; content: string; score: number }>>(
+  const rows = await db.$queryRaw<Array<{ id: string; botId: string; title: string; content: string; tags: string[]; hasEmbedding: boolean; score: number }>>(
     Prisma.sql`
-      SELECT title,
+      SELECT id,
+             bot_id AS "botId",
+             title,
              content,
+             tags,
+             has_embedding AS "hasEmbedding",
              1 - (embedding_vec <=> CAST(${vecStr} AS vector)) AS score
       FROM   "bot_knowledge"
       WHERE  bot_id = ${botId}
@@ -349,8 +381,7 @@ async function vectorSearchDB(botId: string, query: string, apiKey: string): Pro
   );
 
   const relevant = rows.filter(r => Number(r.score) >= SIMILARITY_THRESHOLD);
-  if (!relevant.length) return null;
-  return relevant.map(r => `[${r.title}]\n${r.content}`).join('\n\n');
+  return relevant.map(({ id, botId, title, content, tags, hasEmbedding }) => ({ id, botId, title, content, tags, hasEmbedding }));
 }
 
 /** In-process cosine similarity (original implementation kept as fallback). */
@@ -358,7 +389,7 @@ async function semanticRetrieval(
   knowledge: BotKnowledge[],
   query: string,
   apiKey: string,
-): Promise<string> {
+): Promise<Array<Pick<BotKnowledge, 'id' | 'botId' | 'title' | 'content' | 'tags' | 'hasEmbedding'>>> {
   const queryVec = new Float32Array(await generateEmbedding(query, apiKey));
 
   const withEmbeddings = knowledge.filter(k => k.embeddingData);
@@ -377,10 +408,10 @@ async function semanticRetrieval(
   const relevant = scored.slice(0, TOP_N).filter(s => s.score >= SIMILARITY_THRESHOLD);
 
   if (!relevant.length) {
-    return formatKnowledge(getByKeyword(knowledge, query).slice(0, TOP_N));
+    return getByKeyword(knowledge, query).slice(0, TOP_N);
   }
 
-  return formatKnowledge(relevant.map(r => r.entry));
+  return relevant.map(r => r.entry);
 }
 
 function formatKnowledge(entries: Pick<BotKnowledge, 'title' | 'content'>[]): string {

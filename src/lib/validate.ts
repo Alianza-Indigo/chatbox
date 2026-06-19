@@ -196,6 +196,10 @@ export const UpdateKnowledgeSchema = z.object({
   tags: z.array(z.string().max(50)).max(20).optional(),
 });
 
+export const PreviewKnowledgeSchema = z.object({
+  query: z.string().min(1).max(2_000),
+});
+
 // ── Users ─────────────────────────────────────────────────────────────────
 
 export const PatchUserSchema = z.object({
