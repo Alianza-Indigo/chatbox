@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotKnowledge } from '@prisma/client';
 
-const { mockEmbeddingsCreate, mockQueryRaw } = vi.hoisted(() => ({
+const { mockEmbeddingsCreate, mockQueryRaw, mockExecuteRaw } = vi.hoisted(() => ({
   mockEmbeddingsCreate: vi.fn().mockResolvedValue({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
   mockQueryRaw: vi.fn().mockRejectedValue(new Error('pgvector unavailable in tests')),
+  mockExecuteRaw: vi.fn(),
 }));
 
 vi.mock('openai', () => ({
@@ -15,7 +16,7 @@ vi.mock('openai', () => ({
 vi.mock('../src/db', () => ({
   db: {
     $queryRaw: mockQueryRaw,
-    $executeRaw: vi.fn(),
+    $executeRaw: mockExecuteRaw,
   },
 }));
 
@@ -29,6 +30,7 @@ import {
   encodeEmbedding,
   decodeEmbedding,
   generateEmbedding,
+  clearEmbeddingVector,
 } from '../src/services/knowledge.service';
 
 function makeEntry(id: string, title: string, content: string, tags: string[] = [], embeddingVec?: number[]): BotKnowledge {
@@ -164,5 +166,16 @@ describe('generateEmbedding', () => {
     expect(mockEmbeddingsCreate).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'text-embedding-3-small', input: 'test text' }),
     );
+  });
+});
+
+describe('clearEmbeddingVector', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('clears the pgvector column for a knowledge row', async () => {
+    await clearEmbeddingVector('knowledge-1');
+    expect(mockExecuteRaw).toHaveBeenCalledTimes(1);
   });
 });

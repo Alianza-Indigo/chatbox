@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { db } from '../../db';
 import { invalidateBotCache } from '../../services/bot.service';
-import { generateEmbedding, encodeEmbedding, saveEmbeddingVector } from '../../services/knowledge.service';
+import { clearEmbeddingVector, generateEmbedding, encodeEmbedding, saveEmbeddingVector } from '../../services/knowledge.service';
 import { decrypt, decryptJson } from '../../crypto';
 import { requirePermission } from '../../lib/rbac';
 import { parseBody, KnowledgeSchema, UpdateKnowledgeSchema } from '../../lib/validate';
@@ -40,6 +40,9 @@ const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     }
     if (body.tags !== undefined) data.tags = body.tags;
     const item = await db.botKnowledge.update({ where: { id: itemId }, data });
+    if (body.content !== undefined) {
+      await clearEmbeddingVector(itemId).catch(() => { /* pgvector unavailable */ });
+    }
     invalidateBotCache(botId);
     return reply.send(item);
   });

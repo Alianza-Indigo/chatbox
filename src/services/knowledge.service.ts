@@ -68,6 +68,16 @@ export async function saveEmbeddingVector(knowledgeId: string, vec: number[]): P
   );
 }
 
+export async function clearEmbeddingVector(knowledgeId: string): Promise<void> {
+  await db.$executeRaw(
+    Prisma.sql`
+      UPDATE "bot_knowledge"
+      SET "embedding_vec" = NULL
+      WHERE "id" = ${knowledgeId}
+    `,
+  );
+}
+
 // ─── Retrieval ────────────────────────────────────────────────────────────────
 
 export function getByKeyword(knowledge: BotKnowledge[], query: string): BotKnowledge[] {
