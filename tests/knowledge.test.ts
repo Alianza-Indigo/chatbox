@@ -228,6 +228,20 @@ describe('PDF extraction and chunking', () => {
     expect(chunks.every((chunk) => chunk.tags.includes('pdf'))).toBe(true);
   });
 
+  it('keeps conservative overlap between consecutive chunks for long documents', () => {
+    const text = [
+      'Parrafo A con contexto amplio y suficiente para abrir el documento.',
+      'Parrafo B con datos importantes que no conviene perder en el corte.',
+      'Parrafo C con el cierre y la siguiente idea relacionada.',
+    ].join('\n\n');
+
+    const chunks = buildKnowledgeChunksFromText('Manual', text, 140, ['pdf'], 70);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0].content).toContain('Parrafo B con datos importantes');
+    expect(chunks[1].content).toContain('Parrafo B con datos importantes');
+    expect(chunks[1].content).toContain('Parrafo C con el cierre');
+  });
+
   it('adds hidden import metadata tags to uploaded chunks', () => {
     const chunks = attachImportMetadataToChunks(
       buildKnowledgeChunksFromText('Manual', 'Primer bloque\n\nSegundo bloque', 20, ['pdf']),

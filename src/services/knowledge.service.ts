@@ -14,6 +14,7 @@ const TOP_N = 3;
 // Above this threshold the in-process O(N) cosine scan becomes a latency concern
 const INPROCESS_WARN_THRESHOLD = 5_000;
 const DEFAULT_CHUNK_CHARS = 3_000;
+const DEFAULT_CHUNK_OVERLAP_CHARS = 400;
 const PDF_OCR_PAGE_LIMIT = 8;
 const PDF_OCR_RENDER_WIDTH = 1400;
 const SUPPORTED_DOCUMENT_EXTENSIONS = ['pdf', 'docx', 'txt', 'csv', 'xlsx', 'xls'] as const;
@@ -274,6 +275,7 @@ export function buildKnowledgeChunksFromText(
   text: string,
   maxChars = DEFAULT_CHUNK_CHARS,
   tags: string[] = [],
+  overlapChars = DEFAULT_CHUNK_OVERLAP_CHARS,
 ): Array<{ title: string; content: string; tags: string[] }> {
   const normalized = normalizeExtractedText(text);
   if (!normalized) return [];
@@ -284,7 +286,7 @@ export function buildKnowledgeChunksFromText(
     .filter(Boolean);
 
   const segments = paragraphs.flatMap((paragraph) => splitLongSegment(paragraph, maxChars));
-  const chunks = mergeSegments(segments, maxChars);
+  const chunks = mergeSegments(segments, maxChars, overlapChars);
   const total = chunks.length;
 
   return chunks.map((content, index) => ({
@@ -521,22 +523,61 @@ function splitByWords(text: string, maxChars: number): string[] {
   return pieces;
 }
 
-function mergeSegments(segments: string[], maxChars: number): string[] {
+function mergeSegments(segments: string[], maxChars: number, overlapChars: number): string[] {
   const chunks: string[] = [];
-  let current = '';
+  let currentSegments: string[] = [];
 
   for (const segment of segments) {
-    const next = current ? `${current}\n\n${segment}` : segment;
-    if (next.length > maxChars && current) {
-      chunks.push(current.trim());
-      current = segment;
-    } else {
-      current = next;
+    if (!currentSegments.length) {
+      currentSegments = [segment];
+      continue;
+    }
+
+    if (joinSegments(currentSegments, segment).length > maxChars) {
+      chunks.push(currentSegments.join('\n\n').trim());
+      currentSegments = collectOverlapSegments(currentSegments, overlapChars, maxChars);
+
+      while (currentSegments.length && joinSegments(currentSegments, segment).length > maxChars) {
+        currentSegments.shift();
+      }
+
+      currentSegments = currentSegments.length ? [...currentSegments, segment] : [segment];
+      continue;
+    }
+
+    currentSegments.push(segment);
+  }
+
+  if (currentSegments.length) chunks.push(currentSegments.join('\n\n').trim());
+  return chunks;
+}
+
+function joinSegments(segments: string[], nextSegment?: string): string {
+  const parts = nextSegment ? [...segments, nextSegment] : segments;
+  return parts.join('\n\n');
+}
+
+function collectOverlapSegments(segments: string[], overlapChars: number, maxChars: number): string[] {
+  const effectiveOverlap = Math.min(overlapChars, Math.floor(maxChars / 3));
+  if (effectiveOverlap <= 0 || segments.length === 0) return [];
+
+  const overlapSegments: string[] = [];
+  let total = 0;
+
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index];
+    const extraLength = overlapSegments.length ? segment.length + 2 : segment.length;
+    if (overlapSegments.length > 0 && total + extraLength > effectiveOverlap) {
+      break;
+    }
+    overlapSegments.unshift(segment);
+    total += extraLength;
+    if (total >= effectiveOverlap) {
+      break;
     }
   }
 
-  if (current.trim()) chunks.push(current.trim());
-  return chunks;
+  return overlapSegments;
 }
 
 function extractTextFromWorkbook(buffer: Buffer): string {
