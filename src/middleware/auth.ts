@@ -38,7 +38,12 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
 
   try {
     const payload = verifyToken(token);
-    req.user = { userId: payload.sub, orgId: payload.orgId, role: payload.role, isSuperadmin: false };
+    req.user = {
+      userId: payload.sub,
+      orgId: payload.orgId,
+      role: payload.role,
+      isSuperadmin: payload.role === 'superadmin',
+    };
   } catch {
     return reply.status(401).send({ error: 'Unauthorized' });
   }

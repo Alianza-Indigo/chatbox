@@ -16,6 +16,14 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
+export function isSuperadminEmail(email: string): boolean {
+  return config.SUPERADMIN_EMAILS.includes(email.trim().toLowerCase());
+}
+
+export function getEffectiveRole(email: string, role: string): string {
+  return isSuperadminEmail(email) ? 'superadmin' : role;
+}
+
 export function signToken(payload: TokenPayload): string {
   return jwt.sign(payload, config.JWT_SECRET, {
     expiresIn: '7d',

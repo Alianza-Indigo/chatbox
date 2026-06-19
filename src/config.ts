@@ -13,6 +13,17 @@ const schema = z.object({
   WEBHOOK_VERIFY_TOKEN: z.string().min(1),
   // Minimum 32 chars to prevent weak key attacks
   ADMIN_API_KEY: z.string().min(32),
+  // Comma-separated email allowlist that should receive platform superadmin access
+  // on normal JWT login, without changing the org-level DB role.
+  SUPERADMIN_EMAILS: z.string().optional().transform((value) => {
+    if (!value) return [];
+    return Array.from(new Set(
+      value
+        .split(',')
+        .map((email) => email.trim().toLowerCase())
+        .filter(Boolean),
+    ));
+  }),
   JWT_SECRET: z.string().min(32),
   JWT_ISSUER: z.string().default('chatbox-api'),
   JWT_AUDIENCE: z.string().default('chatbox-clients'),

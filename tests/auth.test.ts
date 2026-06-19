@@ -20,13 +20,18 @@ vi.mock('../src/db', () => ({
 
 // ─── Imports (after mocks are set up) ─────────────────────────────────────────
 
-import { hashPassword, verifyPassword, signToken, verifyToken } from '../src/services/auth.service';
+import { config } from '../src/config';
+import { getEffectiveRole, hashPassword, verifyPassword, signToken, verifyToken } from '../src/services/auth.service';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { requireAuth } from '../src/middleware/auth';
 
 // ── Auth service ──────────────────────────────────────────────────────────────
 
 describe('hashPassword / verifyPassword', () => {
+  beforeEach(() => {
+    config.SUPERADMIN_EMAILS = [];
+  });
+
   it('calls bcrypt.hash with round=10', async () => {
     await hashPassword('secret');
     expect(mockHash).toHaveBeenCalledWith('secret', 10);
@@ -45,6 +50,10 @@ describe('hashPassword / verifyPassword', () => {
 });
 
 describe('signToken / verifyToken', () => {
+  beforeEach(() => {
+    config.SUPERADMIN_EMAILS = [];
+  });
+
   it('roundtrips a token payload', () => {
     const payload = { sub: 'user-1', orgId: 'org-1', role: 'owner' };
     const token = signToken(payload);
@@ -61,6 +70,12 @@ describe('signToken / verifyToken', () => {
 
   it('throws on completely invalid token', () => {
     expect(() => verifyToken('not.a.jwt')).toThrow();
+  });
+
+  it('elevates allowlisted emails to superadmin role', () => {
+    config.SUPERADMIN_EMAILS = ['mossomex@gmail.com'];
+    expect(getEffectiveRole('mossomex@gmail.com', 'owner')).toBe('superadmin');
+    expect(getEffectiveRole('otra@empresa.com', 'owner')).toBe('owner');
   });
 });
 
@@ -81,6 +96,10 @@ function makeReply() {
 }
 
 describe('requireAuth middleware', () => {
+  beforeEach(() => {
+    config.SUPERADMIN_EMAILS = [];
+  });
+
   it('sets superadmin user for ADMIN_API_KEY via x-admin-key', async () => {
     const req = makeReq({ 'x-admin-key': 'test-admin-key-must-be-at-least-32-chars-long!!' });
     const reply = makeReply();
@@ -106,6 +125,15 @@ describe('requireAuth middleware', () => {
     expect(req.user?.orgId).toBe('org-1');
     expect(req.user?.role).toBe('admin');
     expect(req.user?.isSuperadmin).toBe(false);
+  });
+
+  it('sets superadmin user for JWT payloads marked as superadmin', async () => {
+    const token = signToken({ sub: 'user-1', orgId: 'org-1', role: 'superadmin' });
+    const req = makeReq({ authorization: `Bearer ${token}` });
+    const reply = makeReply();
+    await requireAuth(req, reply as unknown as FastifyReply);
+    expect(req.user?.role).toBe('superadmin');
+    expect(req.user?.isSuperadmin).toBe(true);
   });
 
   it('returns 401 for invalid JWT', async () => {

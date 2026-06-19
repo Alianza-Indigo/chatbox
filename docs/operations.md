@@ -13,6 +13,7 @@
 | `WEBHOOK_VERIFY_TOKEN` | Arbitrary string configured in the Meta webhook settings. Must match what Meta sends on `GET /webhook/whatsapp/:phoneId`. |
 | `ADMIN_API_KEY` | Minimum 32 characters. Used as the superadmin bypass token (`x-admin-key` header) and to protect `/docs` and `/metrics`. |
 | `JWT_SECRET` | Minimum 32 characters. Signs and verifies org user JWTs. |
+| `SUPERADMIN_EMAILS` | Comma-separated email allowlist that receives `superadmin` on normal JWT login. |
 | `NODE_ENV` | `production`, `development`, or `test`. Production enforces `PHONE_HASH_SECRET`. |
 | `PHONE_HASH_SECRET` | Minimum 32 characters. HMAC-SHA256 pepper for end-user phone hashes. **Required in `NODE_ENV=production`** to prevent dictionary attacks on the low-entropy phone number space. |
 

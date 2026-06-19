@@ -49,6 +49,7 @@ Ver `.env.example` para la lista completa. Las mínimas requeridas para arrancar
 | `WEBHOOK_VERIFY_TOKEN` | Token de verificación del webhook de Meta |
 | `JWT_SECRET` | Secreto para firmar tokens JWT |
 | `ADMIN_API_KEY` | Clave de superadmin (header `x-admin-key`) |
+| `SUPERADMIN_EMAILS` | Correos separados por comas con acceso superadmin por login |
 
 ## Correr en desarrollo
 
