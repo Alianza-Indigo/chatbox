@@ -1,21 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotKnowledge } from '@prisma/client';
 
-const { mockEmbeddingsCreate, mockQueryRaw, mockExecuteRaw, mockPdfParse } = vi.hoisted(() => ({
+const { mockEmbeddingsCreate, mockChatCompletionsCreate, mockQueryRaw, mockExecuteRaw, mockPdfParse, mockPdfScreenshot, mockPdfDestroy } = vi.hoisted(() => ({
   mockEmbeddingsCreate: vi.fn().mockResolvedValue({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+  mockChatCompletionsCreate: vi.fn().mockResolvedValue({ choices: [{ message: { content: 'OCR detectado en imagen' } }] }),
   mockQueryRaw: vi.fn().mockRejectedValue(new Error('pgvector unavailable in tests')),
   mockExecuteRaw: vi.fn(),
   mockPdfParse: vi.fn(),
+  mockPdfScreenshot: vi.fn(),
+  mockPdfDestroy: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('openai', () => ({
   default: vi.fn().mockImplementation(() => ({
     embeddings: { create: mockEmbeddingsCreate },
+    chat: { completions: { create: mockChatCompletionsCreate } },
   })),
 }));
 
 vi.mock('pdf-parse', () => ({
   default: mockPdfParse,
+  PDFParse: vi.fn().mockImplementation(() => ({
+    getScreenshot: mockPdfScreenshot,
+    destroy: mockPdfDestroy,
+  })),
 }));
 
 vi.mock('../src/db', () => ({
@@ -36,6 +44,7 @@ import {
   decodeEmbedding,
   generateEmbedding,
   extractTextFromPdf,
+  extractTextFromPdfWithOcrFallback,
   extractTextFromImage,
   attachImportMetadataToChunks,
   buildKnowledgeChunksFromText,
@@ -197,6 +206,7 @@ describe('generateEmbedding', () => {
 describe('PDF extraction and chunking', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPdfScreenshot.mockResolvedValue({ pages: [], total: 0 });
   });
 
   it('normalizes extracted PDF text', async () => {
@@ -226,6 +236,20 @@ describe('PDF extraction and chunking', () => {
     expect(chunks.length).toBeGreaterThan(0);
     expect(chunks.every((chunk) => chunk.tags.includes('__source:source-123'))).toBe(true);
     expect(chunks[0]?.tags.some((tag) => tag.startsWith('__chunk:'))).toBe(true);
+  });
+
+  it('uses OCR fallback when a PDF has no extractable text', async () => {
+    mockPdfParse.mockResolvedValueOnce({ text: '' });
+    mockPdfScreenshot.mockResolvedValueOnce({
+      total: 1,
+      pages: [{ data: Uint8Array.from([1, 2, 3]), pageNumber: 1, width: 100, height: 100, scale: 1, dataUrl: '' }],
+    });
+    mockChatCompletionsCreate.mockResolvedValueOnce({ choices: [{ message: { content: 'Texto OCR pagina 1' } }] });
+
+    const text = await extractTextFromPdfWithOcrFallback(Buffer.from('fake pdf'), 'openai', 'sk-test', 'gpt-4.1-mini');
+    expect(text).toContain('Texto OCR pagina 1');
+    expect(mockPdfScreenshot).toHaveBeenCalledTimes(1);
+    expect(mockPdfDestroy).toHaveBeenCalledTimes(1);
   });
 
   it('detects supported document formats by filename or mimetype', () => {

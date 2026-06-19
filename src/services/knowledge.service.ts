@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import mammoth from 'mammoth';
-import pdfParse from 'pdf-parse';
+import pdfParse, { PDFParse } from 'pdf-parse';
 import XLSX from 'xlsx';
 import { GoogleGenAI } from '@google/genai';
 import { Prisma } from '@prisma/client';
@@ -14,6 +14,8 @@ const TOP_N = 3;
 // Above this threshold the in-process O(N) cosine scan becomes a latency concern
 const INPROCESS_WARN_THRESHOLD = 5_000;
 const DEFAULT_CHUNK_CHARS = 3_000;
+const PDF_OCR_PAGE_LIMIT = 8;
+const PDF_OCR_RENDER_WIDTH = 1400;
 const SUPPORTED_DOCUMENT_EXTENSIONS = ['pdf', 'docx', 'txt', 'csv', 'xlsx', 'xls'] as const;
 const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 const OCR_PROMPT = 'Extract all readable text from this image. Return plain text only. Preserve line breaks when helpful. Do not translate, summarize, or add commentary. If there is no readable text, return an empty string.';
@@ -98,6 +100,38 @@ export async function clearEmbeddingVector(knowledgeId: string): Promise<void> {
 export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   const parsed = await pdfParse(buffer);
   return normalizeExtractedText(parsed.text ?? '');
+}
+
+export async function extractTextFromPdfWithOcrFallback(
+  buffer: Buffer,
+  provider: string,
+  apiKey: string,
+  model: string,
+): Promise<string> {
+  const extractedText = await extractTextFromPdf(buffer);
+  if (extractedText) return extractedText;
+
+  const parser = new PDFParse({ data: buffer });
+  try {
+    const screenshots = await parser.getScreenshot({
+      first: PDF_OCR_PAGE_LIMIT,
+      desiredWidth: PDF_OCR_RENDER_WIDTH,
+      imageBuffer: true,
+      imageDataUrl: false,
+    });
+
+    const pageTexts: string[] = [];
+    for (const page of screenshots.pages) {
+      const imageBuffer = Buffer.from(page.data);
+      const pageText = await extractTextFromImage(imageBuffer, 'png', provider, apiKey, model);
+      if (pageText) {
+        pageTexts.push(pageText);
+      }
+    }
+    return normalizeExtractedText(pageTexts.join('\n\n'));
+  } finally {
+    await parser.destroy();
+  }
 }
 
 export async function extractTextFromDocument(

@@ -8,6 +8,7 @@ import {
   clearEmbeddingVector,
   extractTextFromDocument,
   extractTextFromImage,
+  extractTextFromPdfWithOcrFallback,
   generateEmbedding,
   getSupportedDocumentExtension,
   previewRelevantKnowledge,
@@ -41,9 +42,18 @@ const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     const sourceTitle = formatDocumentTitle(file.filename);
     let extractedText = '';
     try {
-      extractedText = isImageExtension(extension)
-        ? await extractTextFromConfiguredProvider(sourceBuffer, extension, bot)
-        : await extractTextFromDocument(sourceBuffer, extension);
+      if (isImageExtension(extension)) {
+        extractedText = await extractTextFromConfiguredProvider(sourceBuffer, extension, bot);
+      } else if (extension === 'pdf' && bot.llmProvider && bot.llmModel && bot.llmApiKeyEnc) {
+        extractedText = await extractTextFromPdfWithOcrFallback(
+          sourceBuffer,
+          bot.llmProvider,
+          decrypt(bot.llmApiKeyEnc),
+          bot.llmModel,
+        );
+      } else {
+        extractedText = await extractTextFromDocument(sourceBuffer, extension);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not extract text from document';
       return reply.status(422).send({ error: message });
