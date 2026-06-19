@@ -37,6 +37,7 @@ import {
   generateEmbedding,
   extractTextFromPdf,
   extractTextFromImage,
+  attachImportMetadataToChunks,
   buildKnowledgeChunksFromText,
   getSupportedDocumentExtension,
   clearEmbeddingVector,
@@ -200,6 +201,16 @@ describe('PDF extraction and chunking', () => {
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks[0].title).toContain('Manual');
     expect(chunks.every((chunk) => chunk.tags.includes('pdf'))).toBe(true);
+  });
+
+  it('adds hidden import metadata tags to uploaded chunks', () => {
+    const chunks = attachImportMetadataToChunks(
+      buildKnowledgeChunksFromText('Manual', 'Primer bloque\n\nSegundo bloque', 20, ['pdf']),
+      'source-123',
+    );
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.every((chunk) => chunk.tags.includes('__source:source-123'))).toBe(true);
+    expect(chunks[0]?.tags.some((tag) => tag.startsWith('__chunk:'))).toBe(true);
   });
 
   it('detects supported document formats by filename or mimetype', () => {

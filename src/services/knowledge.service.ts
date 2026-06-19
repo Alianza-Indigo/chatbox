@@ -17,6 +17,9 @@ const DEFAULT_CHUNK_CHARS = 3_000;
 const SUPPORTED_DOCUMENT_EXTENSIONS = ['pdf', 'docx', 'txt', 'csv', 'xlsx', 'xls'] as const;
 const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 const OCR_PROMPT = 'Extract all readable text from this image. Return plain text only. Preserve line breaks when helpful. Do not translate, summarize, or add commentary. If there is no readable text, return an empty string.';
+export const INTERNAL_KNOWLEDGE_TAG_PREFIX = '__';
+export const KNOWLEDGE_IMPORT_SOURCE_TAG_PREFIX = `${INTERNAL_KNOWLEDGE_TAG_PREFIX}source:`;
+export const KNOWLEDGE_IMPORT_CHUNK_TAG_PREFIX = `${INTERNAL_KNOWLEDGE_TAG_PREFIX}chunk:`;
 
 export type SupportedDocumentExtension = (typeof SUPPORTED_DOCUMENT_EXTENSIONS)[number];
 export type SupportedImageExtension = (typeof SUPPORTED_IMAGE_EXTENSIONS)[number];
@@ -253,6 +256,21 @@ export function buildKnowledgeChunksFromText(
     title: total === 1 ? title : `${title} (${index + 1}/${total})`,
     content,
     tags,
+  }));
+}
+
+export function attachImportMetadataToChunks(
+  chunks: Array<{ title: string; content: string; tags: string[] }>,
+  sourceId: string,
+): Array<{ title: string; content: string; tags: string[] }> {
+  const total = chunks.length;
+  return chunks.map((chunk, index) => ({
+    ...chunk,
+    tags: [
+      ...chunk.tags,
+      `${KNOWLEDGE_IMPORT_SOURCE_TAG_PREFIX}${sourceId}`,
+      `${KNOWLEDGE_IMPORT_CHUNK_TAG_PREFIX}${index + 1}/${total}`,
+    ],
   }));
 }
 

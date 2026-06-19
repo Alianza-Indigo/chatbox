@@ -1,7 +1,9 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { db } from '../../db';
 import { invalidateBotCache } from '../../services/bot.service';
 import {
+  attachImportMetadataToChunks,
   buildKnowledgeChunksFromText,
   clearEmbeddingVector,
   extractTextFromDocument,
@@ -46,7 +48,10 @@ const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(422).send({ error: message });
     }
     const chunkTags = isImageExtension(extension) ? [extension, 'ocr'] : [extension];
-    const chunks = buildKnowledgeChunksFromText(sourceTitle, extractedText, undefined, chunkTags);
+    const chunks = attachImportMetadataToChunks(
+      buildKnowledgeChunksFromText(sourceTitle, extractedText, undefined, chunkTags),
+      randomUUID(),
+    );
     if (!chunks.length) {
       return reply.status(422).send({ error: 'The document does not contain readable text' });
     }
