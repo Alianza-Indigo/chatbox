@@ -99,6 +99,34 @@ export const PromptSchema = z.object({
   systemPrompt: z.string().min(1),
 });
 
+export const PromptArchitectBlueprintSchema = z.object({
+  mode: z.enum(['quick', 'advanced']).default('quick'),
+  assistantName: z.string().min(1).max(120).optional(),
+  businessName: z.string().min(1).max(160).optional(),
+  objective: z.string().trim().min(1).max(2000),
+  audience: z.string().max(1000).optional(),
+  tone: z.string().max(1000).optional(),
+  businessContext: z.string().max(4000).optional(),
+  offerings: z.string().max(3000).optional(),
+  successCriteria: z.string().max(2000).optional(),
+  happyPath: z.string().max(3000).optional(),
+  conversationFlow: z.string().max(3000).optional(),
+  knowledgePolicy: z.string().max(3000).optional(),
+  variables: z.string().max(3000).optional(),
+  tools: z.string().max(3000).optional(),
+  escalationRules: z.string().max(3000).optional(),
+  handoffTriggers: z.string().max(3000).optional(),
+  outOfScope: z.string().max(3000).optional(),
+  prohibitedContent: z.string().max(3000).optional(),
+  outputFormat: z.string().max(3000).optional(),
+  exampleDialogues: z.string().max(4000).optional(),
+  testScenarios: z.string().max(4000).optional(),
+});
+
+export const PromptArchitectGenerateSchema = z.object({
+  blueprint: PromptArchitectBlueprintSchema,
+});
+
 export { BrandingSchema };
 
 export const CommandSchema = z.object({

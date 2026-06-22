@@ -1,13 +1,15 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { Prisma } from '@prisma/client';
 import { db } from '../../db';
-import { encrypt } from '../../crypto';
+import { decrypt, encrypt } from '../../crypto';
 import { invalidateBotCache } from '../../services/bot.service';
 import { requirePermission, can } from '../../lib/rbac';
 import { logAudit } from '../../services/audit.service';
+import { getLLMProvider } from '../../providers/llm';
+import { generatePromptArchitectDraft } from '../../services/prompt-architect.service';
 import {
   parseBody,
-  CreateBotSchema, UpdateBotSchema, PromptSchema,
+  CreateBotSchema, UpdateBotSchema, PromptSchema, PromptArchitectGenerateSchema,
   BrandingSchema, CommandSchema, CrisisConfigSchema,
 } from '../../lib/validate';
 
@@ -157,6 +159,50 @@ const botRoutes: FastifyPluginAsync = async (fastify) => {
 
     invalidateBotCache(id);
     return reply.send({ version: nextVersion });
+  });
+
+  fastify.post<{ Params: { id: string } }>('/:id/prompt-architect/generate', { preHandler: [requirePermission('bot:update-prompt')] }, async (req, reply) => {
+    const { id } = req.params;
+    const { blueprint } = parseBody(PromptArchitectGenerateSchema, req.body);
+    const bot = await db.bot.findUnique({
+      where: { id },
+      include: { branding: { select: { companyName: true, website: true, supportContact: true } } },
+    });
+
+    if (!bot) return reply.status(404).send({ error: 'Bot not found' });
+    if (!bot.llmProvider || !bot.llmModel || !bot.llmApiKeyEnc) {
+      return reply.status(400).send({ error: 'El agente necesita provider, modelo y API key para generar el prompt.' });
+    }
+
+    let provider;
+    try {
+      provider = getLLMProvider(bot.llmProvider);
+    } catch (error) {
+      return reply.status(400).send({ error: error instanceof Error ? error.message : 'Provider no soportado' });
+    }
+
+    const draftPrompt = await generatePromptArchitectDraft({
+      provider,
+      apiKey: decrypt(bot.llmApiKeyEnc),
+      model: bot.llmModel,
+      bot: {
+        name: bot.name,
+        locale: bot.locale,
+        currentPrompt: bot.systemPrompt,
+        branding: bot.branding,
+      },
+      blueprint,
+    });
+
+    return reply.send({
+      draftPrompt,
+      meta: {
+        provider: bot.llmProvider,
+        model: bot.llmModel,
+        basedOnExistingPrompt: Boolean(bot.systemPrompt?.trim()),
+        mode: blueprint.mode,
+      },
+    });
   });
 
   // List prompt versions
