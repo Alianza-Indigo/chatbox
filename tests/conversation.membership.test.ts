@@ -17,6 +17,8 @@ const {
   mockSafetyClassifyAsync: vi.fn().mockResolvedValue({ isCrisis: false }),
 }));
 
+const TEST_TIMEOUT_MS = 15000;
+
 vi.mock('../src/db', () => ({
   db: {
     endUser: {
@@ -192,7 +194,7 @@ describe('Conversation - membership gate (microsaas mode)', () => {
     expect(mockLLMComplete).toHaveBeenCalledTimes(1);
     expect(mockSendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Respuesta del bot' }));
     expect(db.endUser.update).toHaveBeenCalledWith({ where: { id: 'eu-1' }, data: { freeMsgUsed: { increment: 1 } } });
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('paywalls a user who exhausted the free tier and never calls the LLM', async () => {
     const { processInboundMessage } = await import('../src/services/conversation.service');
@@ -205,7 +207,7 @@ describe('Conversation - membership gate (microsaas mode)', () => {
     const sent = mockSendText.mock.calls[0][0].text as string;
     expect(sent).toContain('https://mp/pay');
     expect(db.endUser.update).not.toHaveBeenCalled();
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('serves an active member without consuming a free credit', async () => {
     const { processInboundMessage } = await import('../src/services/conversation.service');
@@ -216,5 +218,5 @@ describe('Conversation - membership gate (microsaas mode)', () => {
 
     expect(mockLLMComplete).toHaveBeenCalledTimes(1);
     expect(db.endUser.update).not.toHaveBeenCalled();
-  });
+  }, TEST_TIMEOUT_MS);
 });

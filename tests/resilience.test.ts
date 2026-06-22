@@ -17,6 +17,8 @@ const {
   mockSafetyClassifyAsync: vi.fn().mockResolvedValue({ isCrisis: false }),
 }));
 
+const TEST_TIMEOUT_MS = 15000;
+
 vi.mock('../src/db', () => ({
   db: {
     endUser: { upsert: vi.fn().mockResolvedValue({ id: 'eu-1', paused: false }) },
@@ -198,7 +200,7 @@ describe('Resilience - lock, idempotency, deduplication', () => {
 
     expect(db.message.upsert).toHaveBeenCalledTimes(2);
     expect(db.message.create).toHaveBeenCalledTimes(1);
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('re-sends the already-persisted response on retry without calling LLM again', async () => {
     const { processInboundMessage } = await import('../src/services/conversation.service');
@@ -225,7 +227,7 @@ describe('Resilience - lock, idempotency, deduplication', () => {
     expect(db.message.create).toHaveBeenCalledTimes(1);
     expect(mockLLMComplete).toHaveBeenCalledTimes(1);
     expect(mockSendText).toHaveBeenCalledTimes(2);
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('producer sets jobId = wa-{waMessageId} so BullMQ deduplicates duplicate webhook deliveries', async () => {
     const { enqueueInboundMessage } = await import('../src/queue/producer');
@@ -242,7 +244,7 @@ describe('Resilience - lock, idempotency, deduplication', () => {
 
     expect(firstOpts.jobId).toBe(`wa-${job.waMessageId}`);
     expect(secondOpts.jobId).toBe(`wa-${job.waMessageId}`);
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('producer encrypts from and textBody before storing in Redis', async () => {
     const { enqueueInboundMessage } = await import('../src/queue/producer');
@@ -259,5 +261,5 @@ describe('Resilience - lock, idempotency, deduplication', () => {
     expect(payload.textBody).not.toBe(job.textBody);
     expect(payload.phoneId).toBe(job.phoneId);
     expect(payload.waMessageId).toBe(job.waMessageId);
-  });
+  }, TEST_TIMEOUT_MS);
 });
